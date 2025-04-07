@@ -3,6 +3,7 @@ package mempool
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"time"
 
@@ -77,7 +78,48 @@ func (t *MempoolTracker) Stop() {
 	close(t.stop)
 }
 
+// RefreshAddresses refreshes the list of tracked addresses from the database
+func (t *MempoolTracker) RefreshAddresses() error {
+	// Get all tracked addresses from database
+	rows, err := t.db.Query(`SELECT address, id, required_confirmations FROM tracked_addresses`)
+	if err != nil {
+		return fmt.Errorf("failed to get tracked addresses: %v", err)
+	}
+	defer rows.Close()
+
+	// Create a new map with current addresses
+	newAddrMap := make(map[string]struct {
+		id                    int64
+		requiredConfirmations int
+	})
+
+	// Update the map with current addresses
+	for rows.Next() {
+		var addr string
+		var id int64
+		var requiredConfirmations int
+		if err := rows.Scan(&addr, &id, &requiredConfirmations); err != nil {
+			log.Printf("Error scanning tracked address: %v", err)
+			continue
+		}
+		newAddrMap[addr] = struct {
+			id                    int64
+			requiredConfirmations int
+		}{id, requiredConfirmations}
+	}
+
+	// Update the tracker's address map
+	t.trackedAddrs = newAddrMap
+	log.Printf("Refreshed mempool tracker with %d addresses", len(newAddrMap))
+	return nil
+}
+
 func (t *MempoolTracker) checkMempool() error {
+	// First refresh the list of tracked addresses
+	if err := t.RefreshAddresses(); err != nil {
+		log.Printf("Error refreshing addresses: %v", err)
+	}
+
 	// Get all transactions in mempool
 	txids, err := t.client.GetMempoolTransactions()
 	if err != nil {
@@ -85,9 +127,6 @@ func (t *MempoolTracker) checkMempool() error {
 	}
 
 	log.Printf("Found %d transactions in mempool", len(txids))
-
-	// Log tracked addresses for debugging
-	log.Printf("Currently tracking %d addresses: %v", len(t.trackedAddrs), t.trackedAddrs)
 
 	// Process each transaction
 	for _, txid := range txids {
@@ -117,52 +156,35 @@ func (t *MempoolTracker) checkMempool() error {
 			}
 
 			addrStr := string(addr)
-			log.Printf("Checking output address: %s", addrStr)
+			if addrInfo, exists := t.trackedAddrs[addrStr]; exists {
+				// Found a tracked address in the output
+				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
 
-			// Check if this address is in our tracked addresses
-			found := false
-			for trackedAddr, addrInfo := range t.trackedAddrs {
-				if addrStr == trackedAddr {
-					found = true
-					// Found a tracked address in the output
-					amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
-					log.Printf("Found tracked address in output: %s (ID: %d)", addrStr, addrInfo.id)
+				// Check if this transaction already exists
+				var existingTxID int64
+				err := t.db.QueryRow(`
+					SELECT id FROM transactions 
+					WHERE address_id = $1 AND tx_id = $2
+				`, addrInfo.id, txid).Scan(&existingTxID)
 
-					// Check if this transaction already exists
-					var existingTxID int64
-					err := t.db.QueryRow(`
-						SELECT id FROM transactions 
-						WHERE address_id = $1 AND tx_id = $2
-					`, addrInfo.id, txid).Scan(&existingTxID)
-
-					if err == sql.ErrNoRows {
-						// Transaction doesn't exist, create a new one
-						transaction := &db.Transaction{
-							AddressID:     addrInfo.id,
-							TxID:          txid,
-							Amount:        amount,
-							IsIncoming:    true,
-							Status:        "pending",
-							Confirmations: 0,
-						}
-
-						// Add transaction to database
-						if err := db.AddTransaction(t.db, transaction); err != nil {
-							log.Printf("Error adding pending transaction: %v", err)
-						} else {
-							log.Printf("Added pending transaction for address %s: %s", addrStr, txid)
-						}
-					} else if err != nil {
-						log.Printf("Error checking for existing transaction: %v", err)
-					} else {
-						log.Printf("Transaction already exists for address %s: %s", addrStr, txid)
+				if err == sql.ErrNoRows {
+					// Transaction doesn't exist, create a new one
+					transaction := &db.Transaction{
+						AddressID:     addrInfo.id,
+						TxID:          txid,
+						Amount:        amount,
+						IsIncoming:    true,
+						Status:        "pending",
+						Confirmations: 0,
 					}
-					break
-				}
-			}
 
-			if !found {
-				log.Printf("Address not found in tracked addresses: %s", addrStr)
+					// Add transaction to database
+					if err := db.AddTransaction(t.db, transaction); err != nil {
+						log.Printf("Error adding pending transaction: %v", err)
+					} else {
+						log.Printf("Added pending transaction for address %s: %s", addrStr, txid)
+					}
+				}
 			}
 		}
 
@@ -177,13 +199,11 @@ func (t *MempoolTracker) checkMempool() error {
 			txIDHex := doge.HexEncodeReversed(vin.TxID)
 			prevTxData, err := t.client.GetRawTransaction(txIDHex)
 			if err != nil {
-				log.Printf("Error getting previous transaction %s: %v", txIDHex, err)
 				continue
 			}
 
 			prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
 			if err != nil {
-				log.Printf("Error decoding previous transaction hex: %v", err)
 				continue
 			}
 			prevTx := doge.DecodeTx(prevTxBytes)
@@ -197,52 +217,35 @@ func (t *MempoolTracker) checkMempool() error {
 				}
 
 				addrStr := string(addr)
-				log.Printf("Checking input address: %s", addrStr)
+				if addrInfo, exists := t.trackedAddrs[addrStr]; exists {
+					// Found a tracked address in the input
+					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
 
-				// Check if this address is in our tracked addresses
-				found := false
-				for trackedAddr, addrInfo := range t.trackedAddrs {
-					if addrStr == trackedAddr {
-						found = true
-						// Found a tracked address in the input
-						amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
-						log.Printf("Found tracked address in input: %s (ID: %d)", addrStr, addrInfo.id)
+					// Check if this transaction already exists
+					var existingTxID int64
+					err := t.db.QueryRow(`
+						SELECT id FROM transactions 
+						WHERE address_id = $1 AND tx_id = $2
+					`, addrInfo.id, txid).Scan(&existingTxID)
 
-						// Check if this transaction already exists
-						var existingTxID int64
-						err := t.db.QueryRow(`
-							SELECT id FROM transactions 
-							WHERE address_id = $1 AND tx_id = $2
-						`, addrInfo.id, txid).Scan(&existingTxID)
-
-						if err == sql.ErrNoRows {
-							// Transaction doesn't exist, create a new one
-							transaction := &db.Transaction{
-								AddressID:     addrInfo.id,
-								TxID:          txid,
-								Amount:        amount,
-								IsIncoming:    false,
-								Status:        "pending",
-								Confirmations: 0,
-							}
-
-							// Add transaction to database
-							if err := db.AddTransaction(t.db, transaction); err != nil {
-								log.Printf("Error adding pending transaction: %v", err)
-							} else {
-								log.Printf("Added pending transaction for address %s: %s", addrStr, txid)
-							}
-						} else if err != nil {
-							log.Printf("Error checking for existing transaction: %v", err)
-						} else {
-							log.Printf("Transaction already exists for address %s: %s", addrStr, txid)
+					if err == sql.ErrNoRows {
+						// Transaction doesn't exist, create a new one
+						transaction := &db.Transaction{
+							AddressID:     addrInfo.id,
+							TxID:          txid,
+							Amount:        amount,
+							IsIncoming:    false,
+							Status:        "pending",
+							Confirmations: 0,
 						}
-						break
-					}
-				}
 
-				if !found {
-					log.Printf("Address not found in tracked addresses: %s", addrStr)
+						// Add transaction to database
+						if err := db.AddTransaction(t.db, transaction); err != nil {
+							log.Printf("Error adding pending transaction: %v", err)
+						} else {
+							log.Printf("Added pending transaction for address %s: %s", addrStr, txid)
+						}
+					}
 				}
 			}
 		}
@@ -253,19 +256,22 @@ func (t *MempoolTracker) checkMempool() error {
 
 // AddAddress adds a new address to track in the mempool
 func (t *MempoolTracker) AddAddress(address string) {
-	// Get or create address with default confirmations
-	addr, err := db.GetOrCreateAddressWithConfirmations(t.db, address, 1)
+	// Get address ID and required confirmations from database
+	var id int64
+	var requiredConfirmations int
+	err := t.db.QueryRow(`
+		SELECT id, required_confirmations 
+		FROM tracked_addresses 
+		WHERE address = $1
+	`, address).Scan(&id, &requiredConfirmations)
 	if err != nil {
-		log.Printf("Error getting or creating address %s: %v", address, err)
+		log.Printf("Error getting address ID for %s: %v", address, err)
 		return
 	}
 
-	// Add to tracked addresses map
 	t.trackedAddrs[address] = struct {
 		id                    int64
 		requiredConfirmations int
-	}{addr.ID, addr.RequiredConfirmations}
-
-	log.Printf("Added address to mempool tracker: %s (ID: %d, Required Confirmations: %d)",
-		address, addr.ID, addr.RequiredConfirmations)
+	}{id, requiredConfirmations}
+	log.Printf("Added address to mempool tracker: %s", address)
 }
