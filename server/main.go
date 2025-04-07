@@ -101,11 +101,19 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 		_, err = db.Exec(`
 			UPDATE transactions 
 			SET confirmations = CASE 
-					WHEN block_height IS NOT NULL THEN CAST($1 - block_height + 1 AS INTEGER)
+					WHEN block_height IS NOT NULL THEN 
+						CASE 
+							WHEN CAST($1 - block_height + 1 AS INTEGER) > 50 THEN 50
+							ELSE CAST($1 - block_height + 1 AS INTEGER)
+						END
 					ELSE 0
 				END,
 				status = CASE 
-					WHEN block_height IS NOT NULL AND CAST($1 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
+					WHEN block_height IS NOT NULL AND 
+						CASE 
+							WHEN CAST($1 - block_height + 1 AS INTEGER) > 50 THEN 50
+							ELSE CAST($1 - block_height + 1 AS INTEGER)
+						END >= $3 THEN 'confirmed' 
 					ELSE 'pending' 
 				END
 			WHERE address_id = $2
@@ -185,11 +193,19 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 						SET block_hash = $1, 
 							block_height = $2, 
 							confirmations = CASE 
-								WHEN block_height IS NOT NULL THEN CAST($2 - block_height + 1 AS INTEGER)
+								WHEN block_height IS NOT NULL THEN 
+									CASE 
+										WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
+										ELSE CAST($2 - block_height + 1 AS INTEGER)
+									END
 								ELSE 1
 							END,
 							status = CASE 
-								WHEN block_height IS NOT NULL AND CAST($2 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
+								WHEN block_height IS NOT NULL AND 
+									CASE 
+										WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
+										ELSE CAST($2 - block_height + 1 AS INTEGER)
+									END >= $3 THEN 'confirmed' 
 								ELSE 'pending' 
 							END
 						WHERE id = $4
@@ -281,11 +297,19 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 							SET block_hash = $1, 
 								block_height = $2, 
 								confirmations = CASE 
-									WHEN block_height IS NOT NULL THEN CAST($2 - block_height + 1 AS INTEGER)
+									WHEN block_height IS NOT NULL THEN 
+										CASE 
+											WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
+											ELSE CAST($2 - block_height + 1 AS INTEGER)
+										END
 									ELSE 1
 								END,
 								status = CASE 
-									WHEN block_height IS NOT NULL AND CAST($2 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
+									WHEN block_height IS NOT NULL AND 
+										CASE 
+											WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
+											ELSE CAST($2 - block_height + 1 AS INTEGER)
+										END >= $3 THEN 'confirmed' 
 									ELSE 'pending' 
 								END
 							WHERE id = $4
