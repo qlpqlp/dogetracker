@@ -1,5 +1,13 @@
 package main
 
+/*
+ * DogeTracker
+ *
+ * This code is based on the Dogecoin Foundation's DogeWalker project
+ * (github.com/dogeorg/dogewalker) and has been modified to create
+ * a transaction tracking system for Dogecoin addresses.
+ */
+
 import (
 	"context"
 	"database/sql"
@@ -17,7 +25,7 @@ import (
 	"github.com/qlpqlp/dogetracker/pkg/core"
 	"github.com/qlpqlp/dogetracker/pkg/mempool"
 	"github.com/qlpqlp/dogetracker/pkg/spec"
-	"github.com/qlpqlp/dogetracker/pkg/walker"
+	"github.com/qlpqlp/dogetracker/pkg/tracker"
 	"github.com/qlpqlp/dogetracker/server/api"
 	serverdb "github.com/qlpqlp/dogetracker/server/db"
 )
@@ -61,7 +69,7 @@ func getEnvIntOrDefault(key string, defaultValue int) int {
 }
 
 // ProcessBlockTransactions processes all transactions in a block and updates the database
-func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain spec.Blockchain) error {
+func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain spec.Blockchain) error {
 	// Get all tracked addresses
 	rows, err := db.Query(`SELECT id, address, required_confirmations FROM tracked_addresses`)
 	if err != nil {
@@ -117,10 +125,11 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 
 				// Check if this transaction already exists as pending
 				var existingTxID int64
+				var existingBlockHeight int64
 				err := db.QueryRow(`
-					SELECT id FROM transactions 
+					SELECT id, block_height FROM transactions 
 					WHERE address_id = $1 AND tx_id = $2 AND status = 'pending'
-				`, addrInfo.id, tx.TxID).Scan(&existingTxID)
+				`, addrInfo.id, tx.TxID).Scan(&existingTxID, &existingBlockHeight)
 
 				if err == sql.ErrNoRows {
 					// Transaction doesn't exist, create a new one
@@ -142,19 +151,22 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 				} else if err != nil {
 					log.Printf("Error checking for existing transaction: %v", err)
 				} else {
+					// Calculate confirmations based on block height difference
+					confirmations := block.Height - existingBlockHeight + 1
+
 					// Transaction exists as pending, update it
 					_, err = db.Exec(`
 						UPDATE transactions 
-						SET block_hash = $1, block_height = $2, confirmations = 1, status = CASE 
-							WHEN 1 >= $3 THEN 'confirmed' 
+						SET block_hash = $1, block_height = $2, confirmations = $5, status = CASE 
+							WHEN $5 >= $3 THEN 'confirmed' 
 							ELSE 'pending' 
 						END
 						WHERE id = $4
-					`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID)
+					`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID, confirmations)
 					if err != nil {
 						log.Printf("Error updating pending transaction: %v", err)
 					} else {
-						log.Printf("Updated pending transaction %s to confirmed", tx.TxID)
+						log.Printf("Updated pending transaction %s with %d confirmations", tx.TxID, confirmations)
 					}
 				}
 			}
@@ -200,10 +212,11 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 
 					// Check if this transaction already exists as pending
 					var existingTxID int64
+					var existingBlockHeight int64
 					err := db.QueryRow(`
-						SELECT id FROM transactions 
+						SELECT id, block_height FROM transactions 
 						WHERE address_id = $1 AND tx_id = $2 AND status = 'pending'
-					`, addrInfo.id, tx.TxID).Scan(&existingTxID)
+					`, addrInfo.id, tx.TxID).Scan(&existingTxID, &existingBlockHeight)
 
 					if err == sql.ErrNoRows {
 						// Transaction doesn't exist, create a new one
@@ -225,19 +238,22 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 					} else if err != nil {
 						log.Printf("Error checking for existing transaction: %v", err)
 					} else {
+						// Calculate confirmations based on block height difference
+						confirmations := block.Height - existingBlockHeight + 1
+
 						// Transaction exists as pending, update it
 						_, err = db.Exec(`
 							UPDATE transactions 
-							SET block_hash = $1, block_height = $2, confirmations = 1, status = CASE 
-								WHEN 1 >= $3 THEN 'confirmed' 
+							SET block_hash = $1, block_height = $2, confirmations = $5, status = CASE 
+								WHEN $5 >= $3 THEN 'confirmed' 
 								ELSE 'pending' 
 							END
 							WHERE id = $4
-						`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID)
+						`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID, confirmations)
 						if err != nil {
 							log.Printf("Error updating pending transaction: %v", err)
 						} else {
-							log.Printf("Updated pending transaction %s to confirmed", tx.TxID)
+							log.Printf("Updated pending transaction %s with %d confirmations", tx.TxID, confirmations)
 						}
 					}
 				}
@@ -270,7 +286,7 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 }
 
 // HandleChainReorganization handles a chain reorganization by undoing transactions from invalid blocks
-func HandleChainReorganization(db *sql.DB, undo *walker.UndoForkBlocks) error {
+func HandleChainReorganization(db *sql.DB, undo *tracker.UndoForkBlocks) error {
 	// Get all tracked addresses
 	rows, err := db.Query(`SELECT id, address FROM tracked_addresses`)
 	if err != nil {
@@ -375,7 +391,7 @@ func main() {
 	dbPort := flag.Int("db-port", getEnvIntOrDefault("DB_PORT", 5432), "PostgreSQL port")
 	dbUser := flag.String("db-user", getEnvOrDefault("DB_USER", "postgres"), "PostgreSQL username")
 	dbPass := flag.String("db-pass", getEnvOrDefault("DB_PASS", "postgres"), "PostgreSQL password")
-	dbName := flag.String("db-name", getEnvOrDefault("DB_NAME", "dogewalker"), "PostgreSQL database name")
+	dbName := flag.String("db-name", getEnvOrDefault("DB_NAME", "dogetracker"), "PostgreSQL database name")
 
 	// API flags
 	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 8080), "API server port")
@@ -424,15 +440,6 @@ func main() {
 		lastBlockHash = *startBlock
 	}
 
-	// Start API server
-	apiServer := api.NewServer(db, config.apiToken)
-	go func() {
-		log.Printf("Starting API server on port %d", config.apiPort)
-		if err := apiServer.Start(config.apiPort); err != nil {
-			log.Printf("API server error: %v", err)
-		}
-	}()
-
 	log.Printf("Connecting to Dogecoin node at %s:%d", config.rpcHost, config.rpcPort)
 
 	ctx, shutdown := context.WithCancel(context.Background())
@@ -457,9 +464,38 @@ func main() {
 		log.Printf("Starting from block hash: %s", startBlockHash)
 	}
 
-	// Initialize mempool tracker
-	mempoolTracker := mempool.NewMempoolTracker(blockchain, db, []string{*dbName})
-	go mempoolTracker.Start(ctx)
+	// Get tracked addresses from database
+	rows, err := db.Query(`SELECT address FROM tracked_addresses`)
+	if err != nil {
+		log.Printf("Failed to get tracked addresses: %v", err)
+	} else {
+		defer rows.Close()
+
+		var trackedAddresses []string
+		for rows.Next() {
+			var addr string
+			if err := rows.Scan(&addr); err != nil {
+				log.Printf("Error scanning tracked address: %v", err)
+				continue
+			}
+			trackedAddresses = append(trackedAddresses, addr)
+		}
+
+		log.Printf("Found %d tracked addresses", len(trackedAddresses))
+
+		// Initialize mempool tracker with actual tracked addresses
+		mempoolTracker := mempool.NewMempoolTracker(blockchain, db, trackedAddresses)
+		go mempoolTracker.Start(ctx)
+
+		// Start API server with mempool tracker
+		apiServer := api.NewServer(db, config.apiToken, mempoolTracker)
+		go func() {
+			log.Printf("Starting API server on port %d", config.apiPort)
+			if err := apiServer.Start(config.apiPort); err != nil {
+				log.Printf("API server error: %v", err)
+			}
+		}()
+	}
 
 	// Watch for new blocks.
 	zmqTip, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
@@ -470,7 +506,7 @@ func main() {
 	tipChanged := chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
 
 	// Walk the blockchain.
-	blocks, err := walker.WalkTheDoge(ctx, walker.WalkerOptions{
+	blocks, err := tracker.WalkTheDoge(ctx, tracker.TrackerOptions{
 		Chain:           &doge.DogeMainNetChain,
 		ResumeFromBlock: startBlockHash,
 		Client:          blockchain,

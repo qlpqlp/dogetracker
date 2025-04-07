@@ -166,3 +166,9 @@ func (t *MempoolTracker) checkMempool() error {
 
 	return nil
 }
+
+// AddAddress adds a new address to track in the mempool
+func (t *MempoolTracker) AddAddress(address string) {
+	t.trackedAddrs[address] = true
+	log.Printf("Added address to mempool tracker: %s", address)
+}

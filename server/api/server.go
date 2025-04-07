@@ -7,18 +7,21 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/qlpqlp/dogetracker/pkg/mempool"
 	"github.com/qlpqlp/dogetracker/server/db"
 )
 
 type Server struct {
-	db       *sql.DB
-	apiToken string
+	db             *sql.DB
+	apiToken       string
+	mempoolTracker *mempool.MempoolTracker
 }
 
-func NewServer(db *sql.DB, apiToken string) *Server {
+func NewServer(db *sql.DB, apiToken string, mempoolTracker *mempool.MempoolTracker) *Server {
 	return &Server{
-		db:       db,
-		apiToken: apiToken,
+		db:             db,
+		apiToken:       apiToken,
+		mempoolTracker: mempoolTracker,
 	}
 }
 
@@ -86,6 +89,11 @@ func (s *Server) handleTrackAddress(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Error processing request", http.StatusInternalServerError)
 		return
+	}
+
+	// Update mempool tracker with the new address
+	if s.mempoolTracker != nil {
+		s.mempoolTracker.AddAddress(req.Address)
 	}
 
 	response := AddressResponse{

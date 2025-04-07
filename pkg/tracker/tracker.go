@@ -1,4 +1,10 @@
-package walker
+package tracker
+
+/*
+ * This package is based on the Dogecoin Foundation's DogeWalker project
+ * (github.com/dogeorg/dogewalker) and has been modified to create
+ * a transaction tracking system for Dogecoin addresses.
+ */
 
 import (
 	"context"
@@ -14,7 +20,7 @@ const (
 	RETRY_DELAY = 5 * time.Second // for RPC and Database errors.
 )
 
-// The type of the DogeWalker output channel; either block or undo
+// The type of the DogeTracker output channel; either block or undo
 type BlockOrUndo struct {
 	Block *ChainBlock     // either the next block in the chain
 	Undo  *UndoForkBlocks // or an undo event (roll back blocks on a fork)
@@ -32,11 +38,11 @@ type UndoForkBlocks struct {
 	LastValidHeight int64         // undo all blocks greater than this height
 	ResumeFromBlock string        // hash of last valid on-chain block (to resume on restart)
 	BlockHashes     []string      // hashes of blocks to be undone
-	FullBlocks      []*ChainBlock // present if FullUndoBlocks is true in WalkerOptions
+	FullBlocks      []*ChainBlock // present if FullUndoBlocks is true in TrackerOptions
 }
 
 // Configuraton for WalkTheDoge.
-type WalkerOptions struct {
+type TrackerOptions struct {
 	Chain           *doge.ChainParams // chain parameters, e.g. doge.DogeMainNetChain
 	ResumeFromBlock string            // last processed block hash to begin walking from (hex)
 	Client          spec.Blockchain   // from NewCoreRPCClient()
@@ -45,7 +51,7 @@ type WalkerOptions struct {
 }
 
 // Private WalkTheDoge internal state.
-type DogeWalker struct {
+type DogeTracker struct {
 	output         chan BlockOrUndo
 	client         spec.Blockchain
 	chain          *doge.ChainParams
@@ -73,8 +79,8 @@ type DogeWalker struct {
  * Useful if you want to manually undo each transaction, rather than undoing
  * everything above `LastValidHeight` by tagging data with block-heights.
  */
-func WalkTheDoge(ctx context.Context, opts WalkerOptions) (blocks chan BlockOrUndo, err error) {
-	c := DogeWalker{
+func WalkTheDoge(ctx context.Context, opts TrackerOptions) (blocks chan BlockOrUndo, err error) {
+	c := DogeTracker{
 		// The larger this channel is, the more blocks we can decode-ahead.
 		output:         make(chan BlockOrUndo, 100),
 		client:         opts.Client,
@@ -92,13 +98,13 @@ func WalkTheDoge(ctx context.Context, opts WalkerOptions) (blocks chan BlockOrUn
 		// We use this to avoid returning a 'stopping' bool from every single function.
 		defer func() {
 			if r := recover(); r != nil {
-				log.Println("DogeWalker: panic received:", r)
+				log.Println("DogeTracker: panic received:", r)
 			}
 		}()
 		resumeFromBlock := opts.ResumeFromBlock
 		if resumeFromBlock == "" {
 			resumeFromBlock = c.fetchBlockHash(1)
-			log.Printf("DogeWalker: no resume-from block hash: starting from origin block: %v", resumeFromBlock)
+			log.Printf("DogeTracker: no resume-from block hash: starting from origin block: %v", resumeFromBlock)
 		}
 		for {
 			// Get the last-processed block header (restart point)
@@ -121,18 +127,18 @@ func WalkTheDoge(ctx context.Context, opts WalkerOptions) (blocks chan BlockOrUn
 			// or a Command to arrive.
 			select {
 			case <-c.stop:
-				log.Println("DogeWalker: received stop signal")
+				log.Println("DogeTracker: received stop signal")
 				c.stopping = true
 				return
 			case <-c.tipChanged:
-				log.Println("DogeWalker: received new block signal")
+				log.Println("DogeTracker: received new block signal")
 			}
 		}
 	}()
 	return c.output, nil
 }
 
-func (c *DogeWalker) verifyChain() error {
+func (c *DogeTracker) verifyChain() error {
 	genesisHash := c.fetchBlockHash(0)
 	if genesisHash != c.chain.GenesisBlock {
 		return fmt.Errorf("WRONG CHAIN! Expected chain '%s' but Core Node does not have a matching Genesis Block hash, it has %s", c.chain.ChainName, genesisHash)
@@ -140,7 +146,7 @@ func (c *DogeWalker) verifyChain() error {
 	return nil
 }
 
-func (c *DogeWalker) followTheChain(nextBlockHash string) (lastProcessed string) {
+func (c *DogeTracker) followTheChain(nextBlockHash string) (lastProcessed string) {
 	// Follow the chain forwards.
 	// If we encounter a fork, generate an Undo.
 	for nextBlockHash != "" {
@@ -170,7 +176,7 @@ func (c *DogeWalker) followTheChain(nextBlockHash string) (lastProcessed string)
 	return
 }
 
-func (c *DogeWalker) undoBlocks(head spec.BlockHeader) (undo *UndoForkBlocks, nextBlockHash string) {
+func (c *DogeTracker) undoBlocks(head spec.BlockHeader) (undo *UndoForkBlocks, nextBlockHash string) {
 	// Walk backwards along the chain (in Core) to find an on-chain block.
 	undo = &UndoForkBlocks{}
 	for {
@@ -199,16 +205,16 @@ func (c *DogeWalker) undoBlocks(head spec.BlockHeader) (undo *UndoForkBlocks, ne
 	}
 }
 
-func (c *DogeWalker) fetchBlockData(blockHash string) []byte {
+func (c *DogeTracker) fetchBlockData(blockHash string) []byte {
 	for {
 		hex, err := c.client.GetBlock(blockHash)
 		if err != nil {
-			log.Println("ChainWalker: error retrieving block (will retry):", err)
+			log.Println("ChainTracker: error retrieving block (will retry):", err)
 			c.sleepForRetry(0)
 		} else {
 			bytes, err := doge.HexDecode(hex)
 			if err != nil {
-				log.Println("ChainWalker: invalid block hex (will retry):", err)
+				log.Println("ChainTracker: invalid block hex (will retry):", err)
 				c.sleepForRetry(0)
 			}
 			return bytes
@@ -216,11 +222,11 @@ func (c *DogeWalker) fetchBlockData(blockHash string) []byte {
 	}
 }
 
-func (c *DogeWalker) fetchBlockHeader(blockHash string) spec.BlockHeader {
+func (c *DogeTracker) fetchBlockHeader(blockHash string) spec.BlockHeader {
 	for {
 		block, err := c.client.GetBlockHeader(blockHash)
 		if err != nil {
-			log.Println("ChainWalker: error retrieving block header (will retry):", err)
+			log.Println("ChainTracker: error retrieving block header (will retry):", err)
 			c.sleepForRetry(0)
 		} else {
 			return block
@@ -228,11 +234,11 @@ func (c *DogeWalker) fetchBlockHeader(blockHash string) spec.BlockHeader {
 	}
 }
 
-func (c *DogeWalker) fetchBlockHash(height int64) string {
+func (c *DogeTracker) fetchBlockHash(height int64) string {
 	for {
 		hash, err := c.client.GetBlockHash(height)
 		if err != nil {
-			log.Println("ChainWalker: error retrieving block hash (will retry):", err)
+			log.Println("ChainTracker: error retrieving block hash (will retry):", err)
 			c.sleepForRetry(0)
 		} else {
 			return hash
@@ -240,11 +246,11 @@ func (c *DogeWalker) fetchBlockHash(height int64) string {
 	}
 }
 
-// func (c *DogeWalker) fetchBlockCount() int64 {
+// func (c *DogeTracker) fetchBlockCount() int64 {
 // 	for {
 // 		count, err := c.client.GetBlockCount()
 // 		if err != nil {
-// 			log.Println("ChainWalker: error retrieving block count (will retry):", err)
+// 			log.Println("ChainTracker: error retrieving block count (will retry):", err)
 // 			c.sleepForRetry(0)
 // 		} else {
 // 			return count
@@ -252,13 +258,13 @@ func (c *DogeWalker) fetchBlockHash(height int64) string {
 // 	}
 // }
 
-func (c *DogeWalker) sleepForRetry(delay time.Duration) {
+func (c *DogeTracker) sleepForRetry(delay time.Duration) {
 	if delay == 0 {
 		delay = RETRY_DELAY
 	}
 	select {
 	case <-c.stop:
-		log.Println("ChainWalker: received stop signal")
+		log.Println("ChainTracker: received stop signal")
 		c.stopping = true
 		panic("stopped") // caught in `Run` method.
 	case <-time.After(delay):
@@ -266,10 +272,10 @@ func (c *DogeWalker) sleepForRetry(delay time.Duration) {
 	}
 }
 
-func (c *DogeWalker) checkShutdown() {
+func (c *DogeTracker) checkShutdown() {
 	select {
 	case <-c.stop:
-		log.Println("ChainWalker: received stop signal")
+		log.Println("ChainTracker: received stop signal")
 		c.stopping = true
 		panic("stopped") // caught in `Run` method.
 	default:
