@@ -100,13 +100,15 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 		// Update all transactions for this address
 		_, err = db.Exec(`
 			UPDATE transactions 
-			SET confirmations = CAST($1 - block_height + 1 AS INTEGER),
+			SET confirmations = CASE 
+					WHEN block_height IS NOT NULL THEN CAST($1 - block_height + 1 AS INTEGER)
+					ELSE 0
+				END,
 				status = CASE 
-					WHEN CAST($1 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
+					WHEN block_height IS NOT NULL AND CAST($1 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
 					ELSE 'pending' 
 				END
-			WHERE address_id = $2 
-			AND block_height IS NOT NULL
+			WHERE address_id = $2
 		`, block.Height, addrInfo.id, addrInfo.requiredConfirmations)
 		if err != nil {
 			log.Printf("Error updating transaction confirmations: %v", err)
@@ -182,13 +184,16 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 						UPDATE transactions 
 						SET block_hash = $1, 
 							block_height = $2, 
-							confirmations = CAST($1 - block_height + 1 AS INTEGER),
+							confirmations = CASE 
+								WHEN block_height IS NOT NULL THEN CAST($2 - block_height + 1 AS INTEGER)
+								ELSE 1
+							END,
 							status = CASE 
-								WHEN CAST($1 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
+								WHEN block_height IS NOT NULL AND CAST($2 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
 								ELSE 'pending' 
 							END
 						WHERE id = $4
-					`, block.Height, block.Height, addrInfo.requiredConfirmations, existingTxID)
+					`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID)
 					if err != nil {
 						log.Printf("Error updating transaction: %v", err)
 					}
@@ -275,13 +280,16 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 							UPDATE transactions 
 							SET block_hash = $1, 
 								block_height = $2, 
-								confirmations = CAST($1 - block_height + 1 AS INTEGER),
+								confirmations = CASE 
+									WHEN block_height IS NOT NULL THEN CAST($2 - block_height + 1 AS INTEGER)
+									ELSE 1
+								END,
 								status = CASE 
-									WHEN CAST($1 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
+									WHEN block_height IS NOT NULL AND CAST($2 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
 									ELSE 'pending' 
 								END
 							WHERE id = $4
-						`, block.Height, block.Height, addrInfo.requiredConfirmations, existingTxID)
+						`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID)
 						if err != nil {
 							log.Printf("Error updating transaction: %v", err)
 						}
