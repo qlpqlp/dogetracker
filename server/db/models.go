@@ -24,6 +24,7 @@ type Transaction struct {
 	Amount        float64   `json:"amount"`
 	IsIncoming    bool      `json:"is_incoming"`
 	Confirmations int       `json:"confirmations"`
+	Status        string    `json:"status"` // "pending" or "confirmed"
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -65,6 +66,7 @@ func InitDB(db *sql.DB) error {
 			amount DECIMAL(20,8) NOT NULL,
 			is_incoming BOOLEAN NOT NULL,
 			confirmations INTEGER NOT NULL DEFAULT 0,
+			status VARCHAR(10) NOT NULL DEFAULT 'pending',
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(address_id, tx_id)
 		)

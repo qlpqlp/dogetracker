@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -31,7 +32,7 @@ func (s *Server) Start(port int) error {
 	http.HandleFunc("/api/track", s.authMiddleware(s.handleTrackAddress))
 	http.HandleFunc("/api/address/", s.authMiddleware(s.handleGetAddress))
 
-	return http.ListenAndServe(":"+string(port), nil)
+	return http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
 }
 
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {

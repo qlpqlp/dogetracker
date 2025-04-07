@@ -15,6 +15,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/qlpqlp/dogetracker/pkg/chaser"
 	"github.com/qlpqlp/dogetracker/pkg/core"
+	"github.com/qlpqlp/dogetracker/pkg/mempool"
 	"github.com/qlpqlp/dogetracker/pkg/walker"
 	"github.com/qlpqlp/dogetracker/server/api"
 )
@@ -166,6 +167,10 @@ func main() {
 			}
 		}
 	}()
+
+	// Initialize mempool tracker
+	mempoolTracker := mempool.NewMempoolTracker(blockchain, db, []string{*dbName})
+	go mempoolTracker.Start(ctx)
 
 	// Hook ^C signal.
 	sigCh := make(chan os.Signal, 1)

@@ -7,6 +7,9 @@ type Blockchain interface {
 	GetBlockHash(blockHeight int64) (hash string, err error)
 	GetBestBlockHash() (blockHash string, err error)
 	GetBlockCount() (blockCount int64, err error)
+	GetMempoolTransactions() ([]string, error)
+	GetMempoolTransaction(txid string) (map[string]interface{}, error)
+	GetRawTransaction(txid string) (map[string]interface{}, error)
 }
 
 // BlockHeader from Dogecoin Core

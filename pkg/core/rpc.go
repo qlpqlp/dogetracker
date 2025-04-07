@@ -54,6 +54,27 @@ func (c *CoreRPCClient) GetBlockCount() (blockCount int64, err error) {
 	return
 }
 
+// GetMempoolTransactions returns all transaction IDs in the mempool
+func (c *CoreRPCClient) GetMempoolTransactions() ([]string, error) {
+	var txids []string
+	err := c.Request("getrawmempool", []any{false}, &txids)
+	return txids, err
+}
+
+// GetMempoolTransaction returns detailed information about a specific mempool transaction
+func (c *CoreRPCClient) GetMempoolTransaction(txid string) (map[string]interface{}, error) {
+	var result map[string]interface{}
+	err := c.Request("getmempoolentry", []any{txid}, &result)
+	return result, err
+}
+
+// GetRawTransaction returns detailed information about a transaction
+func (c *CoreRPCClient) GetRawTransaction(txid string) (map[string]interface{}, error) {
+	var result map[string]interface{}
+	err := c.Request("getrawtransaction", []any{txid, true}, &result)
+	return result, err
+}
+
 func (c *CoreRPCClient) Request(method string, params []any, result any) error {
 	id := c.id.Add(1) // each request should use a unique ID
 	c.lock.Lock()
