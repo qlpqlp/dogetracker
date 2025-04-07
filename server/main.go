@@ -78,7 +78,7 @@ func main() {
 	// API flags
 	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 8080), "API server port")
 	apiToken := flag.String("api-token", getEnvOrDefault("API_TOKEN", ""), "API bearer token for authentication")
-	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f"), "Starting block hash to begin processing from")
+	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f"), "Starting block hash or height to begin processing from")
 
 	// Parse command line flags
 	flag.Parse()
@@ -138,6 +138,23 @@ func main() {
 	// Core Node blockchain access.
 	blockchain := core.NewCoreRPCClient(config.rpcHost, config.rpcPort, config.rpcUser, config.rpcPass)
 
+	// Check if startBlock is a block height (numeric) or block hash
+	var startBlockHash string
+	if blockHeight, err := strconv.ParseInt(*startBlock, 10, 64); err == nil {
+		// It's a block height, get the corresponding block hash
+		startBlockHash, err = blockchain.GetBlockHash(blockHeight)
+		if err != nil {
+			log.Printf("Failed to get block hash for height %d: %v", blockHeight, err)
+			startBlockHash = lastBlockHash // Fall back to last processed block
+		} else {
+			log.Printf("Starting from block height %d (hash: %s)", blockHeight, startBlockHash)
+		}
+	} else {
+		// It's already a block hash
+		startBlockHash = *startBlock
+		log.Printf("Starting from block hash: %s", startBlockHash)
+	}
+
 	// Watch for new blocks.
 	zmqTip, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
 	if err != nil {
@@ -149,7 +166,7 @@ func main() {
 	// Walk the blockchain.
 	blocks, err := walker.WalkTheDoge(ctx, walker.WalkerOptions{
 		Chain:           &doge.DogeMainNetChain,
-		ResumeFromBlock: lastBlockHash,
+		ResumeFromBlock: startBlockHash,
 		Client:          blockchain,
 		TipChanged:      tipChanged,
 	})
