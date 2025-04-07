@@ -157,8 +157,8 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					// Transaction exists as pending, update it
 					_, err = db.Exec(`
 						UPDATE transactions 
-						SET block_hash = $1, block_height = $2, confirmations = $5, status = CASE 
-							WHEN $5 >= $3 THEN 'confirmed' 
+						SET block_hash = $1, block_height = $2, confirmations = CAST($5 AS INTEGER), status = CASE 
+							WHEN CAST($5 AS INTEGER) >= $3 THEN 'confirmed' 
 							ELSE 'pending' 
 						END
 						WHERE id = $4
@@ -244,8 +244,8 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 						// Transaction exists as pending, update it
 						_, err = db.Exec(`
 							UPDATE transactions 
-							SET block_hash = $1, block_height = $2, confirmations = $5, status = CASE 
-								WHEN $5 >= $3 THEN 'confirmed' 
+							SET block_hash = $1, block_height = $2, confirmations = CAST($5 AS INTEGER), status = CASE 
+								WHEN CAST($5 AS INTEGER) >= $3 THEN 'confirmed' 
 								ELSE 'pending' 
 							END
 							WHERE id = $4
