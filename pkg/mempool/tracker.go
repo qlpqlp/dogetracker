@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/qlpqlp/dogetracker/pkg/spec"
@@ -15,6 +16,8 @@ type MempoolTracker struct {
 	db           *sql.DB
 	trackedAddrs map[string]bool
 	stop         chan struct{}
+	lock         sync.RWMutex
+	lastTxids    map[string]bool
 }
 
 func NewMempoolTracker(client spec.Blockchain, db *sql.DB, trackedAddrs []string) *MempoolTracker {
@@ -28,12 +31,19 @@ func NewMempoolTracker(client spec.Blockchain, db *sql.DB, trackedAddrs []string
 		db:           db,
 		trackedAddrs: addrMap,
 		stop:         make(chan struct{}),
+		lastTxids:    make(map[string]bool),
 	}
 }
 
 func (t *MempoolTracker) Start(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
+	// Check mempool every 2 seconds
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+
+	// Initial mempool check
+	if err := t.checkMempool(); err != nil {
+		log.Printf("Error in initial mempool check: %v", err)
+	}
 
 	for {
 		select {
@@ -60,8 +70,22 @@ func (t *MempoolTracker) checkMempool() error {
 		return err
 	}
 
-	// Process each transaction
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	// Create a map of current transactions
+	currentTxids := make(map[string]bool)
 	for _, txid := range txids {
+		currentTxids[txid] = true
+	}
+
+	// Process new transactions
+	for _, txid := range txids {
+		// Skip if we've already processed this transaction
+		if t.lastTxids[txid] {
+			continue
+		}
+
 		tx, err := t.client.GetRawTransaction(txid)
 		if err != nil {
 			continue
@@ -89,6 +113,8 @@ func (t *MempoolTracker) checkMempool() error {
 							}
 							if err := db.AddTransaction(t.db, tx); err != nil {
 								log.Printf("Error adding pending transaction: %v", err)
+							} else {
+								log.Printf("Added pending incoming transaction %s for address %s: %f DOGE", txid, addrStr, amount)
 							}
 						}
 					}
@@ -124,6 +150,8 @@ func (t *MempoolTracker) checkMempool() error {
 									}
 									if err := db.AddTransaction(t.db, tx); err != nil {
 										log.Printf("Error adding pending transaction: %v", err)
+									} else {
+										log.Printf("Added pending outgoing transaction %s for address %s: %f DOGE", txid, addrStr, amount)
 									}
 								}
 							}
@@ -133,6 +161,9 @@ func (t *MempoolTracker) checkMempool() error {
 			}
 		}
 	}
+
+	// Update lastTxids with current transactions
+	t.lastTxids = currentTxids
 
 	return nil
 }

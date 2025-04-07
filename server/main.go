@@ -207,7 +207,12 @@ func main() {
 	}()
 
 	// Initialize mempool tracker
-	mempoolTracker := mempool.NewMempoolTracker(blockchain, db, []string{*dbName})
+	trackedAddresses, err := serverdb.GetAllTrackedAddresses(db)
+	if err != nil {
+		log.Printf("Failed to get tracked addresses: %v", err)
+		trackedAddresses = []string{} // Empty list if error
+	}
+	mempoolTracker := mempool.NewMempoolTracker(blockchain, db, trackedAddresses)
 	go mempoolTracker.Start(ctx)
 
 	// Hook ^C signal.
