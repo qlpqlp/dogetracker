@@ -108,21 +108,44 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 					log.Printf("Error adding unspent output: %v", err)
 				}
 
-				// Create transaction record
-				transaction := &serverdb.Transaction{
-					AddressID:     addrID,
-					TxID:          tx.TxID,
-					BlockHash:     block.Hash,
-					BlockHeight:   block.Height,
-					Amount:        amount,
-					IsIncoming:    true,
-					Confirmations: 1, // First confirmation
-					Status:        "confirmed",
-				}
+				// Check if this transaction already exists as pending
+				var existingTxID int64
+				err := db.QueryRow(`
+					SELECT id FROM transactions 
+					WHERE address_id = $1 AND tx_id = $2 AND status = 'pending'
+				`, addrID, tx.TxID).Scan(&existingTxID)
 
-				// Add transaction to database
-				if err := serverdb.AddTransaction(db, transaction); err != nil {
-					log.Printf("Error adding transaction: %v", err)
+				if err == sql.ErrNoRows {
+					// Transaction doesn't exist, create a new one
+					transaction := &serverdb.Transaction{
+						AddressID:     addrID,
+						TxID:          tx.TxID,
+						BlockHash:     block.Hash,
+						BlockHeight:   block.Height,
+						Amount:        amount,
+						IsIncoming:    true,
+						Confirmations: 1, // First confirmation
+						Status:        "confirmed",
+					}
+
+					// Add transaction to database
+					if err := serverdb.AddTransaction(db, transaction); err != nil {
+						log.Printf("Error adding transaction: %v", err)
+					}
+				} else if err != nil {
+					log.Printf("Error checking for existing transaction: %v", err)
+				} else {
+					// Transaction exists as pending, update it
+					_, err = db.Exec(`
+						UPDATE transactions 
+						SET block_hash = $1, block_height = $2, confirmations = 1, status = 'confirmed'
+						WHERE id = $3
+					`, block.Hash, block.Height, existingTxID)
+					if err != nil {
+						log.Printf("Error updating pending transaction: %v", err)
+					} else {
+						log.Printf("Updated pending transaction %s to confirmed", tx.TxID)
+					}
 				}
 			}
 		}
@@ -165,21 +188,44 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 						log.Printf("Error removing unspent output: %v", err)
 					}
 
-					// Create transaction record
-					transaction := &serverdb.Transaction{
-						AddressID:     addrID,
-						TxID:          tx.TxID,
-						BlockHash:     block.Hash,
-						BlockHeight:   block.Height,
-						Amount:        amount,
-						IsIncoming:    false,
-						Confirmations: 1, // First confirmation
-						Status:        "confirmed",
-					}
+					// Check if this transaction already exists as pending
+					var existingTxID int64
+					err := db.QueryRow(`
+						SELECT id FROM transactions 
+						WHERE address_id = $1 AND tx_id = $2 AND status = 'pending'
+					`, addrID, tx.TxID).Scan(&existingTxID)
 
-					// Add transaction to database
-					if err := serverdb.AddTransaction(db, transaction); err != nil {
-						log.Printf("Error adding transaction: %v", err)
+					if err == sql.ErrNoRows {
+						// Transaction doesn't exist, create a new one
+						transaction := &serverdb.Transaction{
+							AddressID:     addrID,
+							TxID:          tx.TxID,
+							BlockHash:     block.Hash,
+							BlockHeight:   block.Height,
+							Amount:        amount,
+							IsIncoming:    false,
+							Confirmations: 1, // First confirmation
+							Status:        "confirmed",
+						}
+
+						// Add transaction to database
+						if err := serverdb.AddTransaction(db, transaction); err != nil {
+							log.Printf("Error adding transaction: %v", err)
+						}
+					} else if err != nil {
+						log.Printf("Error checking for existing transaction: %v", err)
+					} else {
+						// Transaction exists as pending, update it
+						_, err = db.Exec(`
+							UPDATE transactions 
+							SET block_hash = $1, block_height = $2, confirmations = 1, status = 'confirmed'
+							WHERE id = $3
+						`, block.Hash, block.Height, existingTxID)
+						if err != nil {
+							log.Printf("Error updating pending transaction: %v", err)
+						} else {
+							log.Printf("Updated pending transaction %s to confirmed", tx.TxID)
+						}
 					}
 				}
 			}
@@ -398,6 +444,10 @@ func main() {
 		log.Printf("Starting from block hash: %s", startBlockHash)
 	}
 
+	// Initialize mempool tracker
+	mempoolTracker := mempool.NewMempoolTracker(blockchain, db, []string{*dbName})
+	go mempoolTracker.Start(ctx)
+
 	// Watch for new blocks.
 	zmqTip, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
 	if err != nil {
@@ -447,10 +497,6 @@ func main() {
 			}
 		}
 	}()
-
-	// Initialize mempool tracker
-	mempoolTracker := mempool.NewMempoolTracker(blockchain, db, []string{*dbName})
-	go mempoolTracker.Start(ctx)
 
 	// Hook ^C signal.
 	sigCh := make(chan os.Signal, 1)

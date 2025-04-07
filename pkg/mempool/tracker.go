@@ -61,11 +61,14 @@ func (t *MempoolTracker) checkMempool() error {
 		return err
 	}
 
+	log.Printf("Found %d transactions in mempool", len(txids))
+
 	// Process each transaction
 	for _, txid := range txids {
 		// Get raw transaction hex
 		txData, err := t.client.GetRawTransaction(txid)
 		if err != nil {
+			log.Printf("Error getting raw transaction %s: %v", txid, err)
 			continue
 		}
 
@@ -87,7 +90,10 @@ func (t *MempoolTracker) checkMempool() error {
 				continue
 			}
 
-			if t.trackedAddrs[string(addr)] {
+			addrStr := string(addr)
+			log.Printf("Checking output address: %s", addrStr)
+			if t.trackedAddrs[addrStr] {
+				log.Printf("Found tracked address in output: %s", addrStr)
 				// Found a tracked address in the output
 				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
 				transaction := &db.Transaction{
@@ -96,8 +102,12 @@ func (t *MempoolTracker) checkMempool() error {
 					IsIncoming: true,
 					Status:     "pending",
 				}
+
+				// Add transaction to database
 				if err := db.AddTransaction(t.db, transaction); err != nil {
 					log.Printf("Error adding pending transaction: %v", err)
+				} else {
+					log.Printf("Added pending transaction for address %s: %s", addrStr, txid)
 				}
 			}
 		}
@@ -116,7 +126,6 @@ func (t *MempoolTracker) checkMempool() error {
 				continue
 			}
 
-			// Decode previous transaction
 			prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
 			if err != nil {
 				continue
@@ -131,7 +140,10 @@ func (t *MempoolTracker) checkMempool() error {
 					continue
 				}
 
-				if t.trackedAddrs[string(addr)] {
+				addrStr := string(addr)
+				log.Printf("Checking input address: %s", addrStr)
+				if t.trackedAddrs[addrStr] {
+					log.Printf("Found tracked address in input: %s", addrStr)
 					// Found a tracked address in the input
 					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
 					transaction := &db.Transaction{
@@ -140,8 +152,12 @@ func (t *MempoolTracker) checkMempool() error {
 						IsIncoming: false,
 						Status:     "pending",
 					}
+
+					// Add transaction to database
 					if err := db.AddTransaction(t.db, transaction); err != nil {
 						log.Printf("Error adding pending transaction: %v", err)
+					} else {
+						log.Printf("Added pending transaction for address %s: %s", addrStr, txid)
 					}
 				}
 			}
