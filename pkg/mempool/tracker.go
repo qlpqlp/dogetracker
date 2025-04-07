@@ -77,41 +77,41 @@ func (t *MempoolTracker) checkMempool() error {
 		}
 
 		// Decode transaction using doge package
-		tx := doge.DecodeTransaction(txBytes)
+		tx := doge.DecodeTx(txBytes)
 
 		// Process outputs (incoming transactions)
-		for i, vout := range tx.Vout {
+		for _, vout := range tx.VOut {
 			// Extract addresses from output script
-			addresses, err := doge.ExtractAddresses(vout.ScriptPubKey, &doge.DogeMainNetChain)
-			if err != nil {
+			scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
+			if scriptType == "" {
 				continue
 			}
 
-			for _, addr := range addresses {
-				if t.trackedAddrs[addr] {
-					// Found a tracked address in the output
-					amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
-					transaction := &db.Transaction{
-						TxID:       txid,
-						Amount:     amount,
-						IsIncoming: true,
-						Status:     "pending",
-					}
-					if err := db.AddTransaction(t.db, transaction); err != nil {
-						log.Printf("Error adding pending transaction: %v", err)
-					}
+			if t.trackedAddrs[string(addr)] {
+				// Found a tracked address in the output
+				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
+				transaction := &db.Transaction{
+					TxID:       txid,
+					Amount:     amount,
+					IsIncoming: true,
+					Status:     "pending",
+				}
+				if err := db.AddTransaction(t.db, transaction); err != nil {
+					log.Printf("Error adding pending transaction: %v", err)
 				}
 			}
 		}
 
 		// Process inputs (outgoing transactions)
-		for _, vin := range tx.Vin {
-			if vin.Coinbase != "" {
-				continue // Skip coinbase transactions
+		for _, vin := range tx.VIn {
+			// Skip coinbase transactions (they have empty TxID)
+			if len(vin.TxID) == 0 {
+				continue
 			}
 
 			// Get the previous transaction
-			prevTxData, err := t.client.GetRawTransaction(vin.TxID)
+			txIDHex := doge.HexEncodeReversed(vin.TxID)
+			prevTxData, err := t.client.GetRawTransaction(txIDHex)
 			if err != nil {
 				continue
 			}
@@ -121,29 +121,27 @@ func (t *MempoolTracker) checkMempool() error {
 			if err != nil {
 				continue
 			}
-			prevTx := doge.DecodeTransaction(prevTxBytes)
+			prevTx := doge.DecodeTx(prevTxBytes)
 
 			// Check if the spent output belonged to a tracked address
-			if vin.VoutIndex < uint32(len(prevTx.Vout)) {
-				prevOut := prevTx.Vout[vin.VoutIndex]
-				addresses, err := doge.ExtractAddresses(prevOut.ScriptPubKey, &doge.DogeMainNetChain)
-				if err != nil {
+			if vin.VOut < uint32(len(prevTx.VOut)) {
+				prevOut := prevTx.VOut[vin.VOut]
+				scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+				if scriptType == "" {
 					continue
 				}
 
-				for _, addr := range addresses {
-					if t.trackedAddrs[addr] {
-						// Found a tracked address in the input
-						amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
-						transaction := &db.Transaction{
-							TxID:       txid,
-							Amount:     amount,
-							IsIncoming: false,
-							Status:     "pending",
-						}
-						if err := db.AddTransaction(t.db, transaction); err != nil {
-							log.Printf("Error adding pending transaction: %v", err)
-						}
+				if t.trackedAddrs[string(addr)] {
+					// Found a tracked address in the input
+					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
+					transaction := &db.Transaction{
+						TxID:       txid,
+						Amount:     amount,
+						IsIncoming: false,
+						Status:     "pending",
+					}
+					if err := db.AddTransaction(t.db, transaction); err != nil {
+						log.Printf("Error adding pending transaction: %v", err)
 					}
 				}
 			}
