@@ -96,7 +96,16 @@ func (t *MempoolTracker) checkMempool() error {
 				//log.Printf("Found tracked address in output: %s", addrStr)
 				// Found a tracked address in the output
 				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
+
+				// Get or create the address in the database to get its ID
+				addr, err := db.GetOrCreateAddress(t.db, addrStr)
+				if err != nil {
+					log.Printf("Error getting address ID for %s: %v", addrStr, err)
+					continue
+				}
+
 				transaction := &db.Transaction{
+					AddressID:  addr.ID,
 					TxID:       txid,
 					Amount:     amount,
 					IsIncoming: true,
@@ -146,7 +155,16 @@ func (t *MempoolTracker) checkMempool() error {
 					//log.Printf("Found tracked address in input: %s", addrStr)
 					// Found a tracked address in the input
 					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
+
+					// Get or create the address in the database to get its ID
+					addr, err := db.GetOrCreateAddress(t.db, addrStr)
+					if err != nil {
+						log.Printf("Error getting address ID for %s: %v", addrStr, err)
+						continue
+					}
+
 					transaction := &db.Transaction{
+						AddressID:  addr.ID,
 						TxID:       txid,
 						Amount:     amount,
 						IsIncoming: false,
