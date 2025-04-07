@@ -95,6 +95,24 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 		}{id, requiredConfirmations}
 	}
 
+	// First, update confirmations for all existing transactions
+	for _, addrInfo := range trackedAddrs {
+		// Update all transactions for this address
+		_, err = db.Exec(`
+			UPDATE transactions 
+			SET confirmations = CAST($1 - block_height + 1 AS INTEGER),
+				status = CASE 
+					WHEN CAST($1 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
+					ELSE 'pending' 
+				END
+			WHERE address_id = $2 
+			AND block_height IS NOT NULL
+		`, block.Height, addrInfo.id, addrInfo.requiredConfirmations)
+		if err != nil {
+			log.Printf("Error updating transaction confirmations: %v", err)
+		}
+	}
+
 	// Process each transaction in the block
 	for _, tx := range block.Block.Tx {
 		// Process outputs (incoming transactions)
@@ -123,15 +141,23 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					log.Printf("Error adding unspent output: %v", err)
 				}
 
-				// Check if this transaction already exists as pending
+				// Check if this transaction already exists
 				var existingTxID int64
-				var existingBlockHeight int64
 				err := db.QueryRow(`
-					SELECT id, block_height FROM transactions 
-					WHERE address_id = $1 AND tx_id = $2 AND status = 'pending'
-				`, addrInfo.id, tx.TxID).Scan(&existingTxID, &existingBlockHeight)
+					SELECT id FROM transactions 
+					WHERE address_id = $1 AND tx_id = $2
+				`, addrInfo.id, tx.TxID).Scan(&existingTxID)
 
 				if err == sql.ErrNoRows {
+					// Calculate initial confirmations
+					confirmations := 1 // First confirmation
+
+					// Determine initial status
+					status := "pending"
+					if confirmations >= addrInfo.requiredConfirmations {
+						status = "confirmed"
+					}
+
 					// Transaction doesn't exist, create a new one
 					transaction := &serverdb.Transaction{
 						AddressID:     addrInfo.id,
@@ -140,8 +166,8 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 						BlockHeight:   block.Height,
 						Amount:        amount,
 						IsIncoming:    true,
-						Confirmations: 1,         // First confirmation
-						Status:        "pending", // Start as pending until required confirmations are met
+						Confirmations: confirmations,
+						Status:        status,
 					}
 
 					// Add transaction to database
@@ -151,22 +177,20 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 				} else if err != nil {
 					log.Printf("Error checking for existing transaction: %v", err)
 				} else {
-					// Calculate confirmations based on block height difference
-					confirmations := block.Height - existingBlockHeight + 1
-
-					// Transaction exists as pending, update it
+					// Transaction exists, update it with the new block information
 					_, err = db.Exec(`
 						UPDATE transactions 
-						SET block_hash = $1, block_height = $2, confirmations = CAST($5 AS INTEGER), status = CASE 
-							WHEN CAST($5 AS INTEGER) >= $3 THEN 'confirmed' 
-							ELSE 'pending' 
-						END
+						SET block_hash = $1, 
+							block_height = $2, 
+							confirmations = CAST($1 - block_height + 1 AS INTEGER),
+							status = CASE 
+								WHEN CAST($1 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
+								ELSE 'pending' 
+							END
 						WHERE id = $4
-					`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID, confirmations)
+					`, block.Height, block.Height, addrInfo.requiredConfirmations, existingTxID)
 					if err != nil {
-						log.Printf("Error updating pending transaction: %v", err)
-					} else {
-						log.Printf("Updated pending transaction %s with %d confirmations", tx.TxID, confirmations)
+						log.Printf("Error updating transaction: %v", err)
 					}
 				}
 			}
@@ -210,15 +234,23 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 						log.Printf("Error removing unspent output: %v", err)
 					}
 
-					// Check if this transaction already exists as pending
+					// Check if this transaction already exists
 					var existingTxID int64
-					var existingBlockHeight int64
 					err := db.QueryRow(`
-						SELECT id, block_height FROM transactions 
-						WHERE address_id = $1 AND tx_id = $2 AND status = 'pending'
-					`, addrInfo.id, tx.TxID).Scan(&existingTxID, &existingBlockHeight)
+						SELECT id FROM transactions 
+						WHERE address_id = $1 AND tx_id = $2
+					`, addrInfo.id, tx.TxID).Scan(&existingTxID)
 
 					if err == sql.ErrNoRows {
+						// Calculate initial confirmations
+						confirmations := 1 // First confirmation
+
+						// Determine initial status
+						status := "pending"
+						if confirmations >= addrInfo.requiredConfirmations {
+							status = "confirmed"
+						}
+
 						// Transaction doesn't exist, create a new one
 						transaction := &serverdb.Transaction{
 							AddressID:     addrInfo.id,
@@ -227,8 +259,8 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 							BlockHeight:   block.Height,
 							Amount:        amount,
 							IsIncoming:    false,
-							Confirmations: 1,         // First confirmation
-							Status:        "pending", // Start as pending until required confirmations are met
+							Confirmations: confirmations,
+							Status:        status,
 						}
 
 						// Add transaction to database
@@ -238,22 +270,20 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					} else if err != nil {
 						log.Printf("Error checking for existing transaction: %v", err)
 					} else {
-						// Calculate confirmations based on block height difference
-						confirmations := block.Height - existingBlockHeight + 1
-
-						// Transaction exists as pending, update it
+						// Transaction exists, update it with the new block information
 						_, err = db.Exec(`
 							UPDATE transactions 
-							SET block_hash = $1, block_height = $2, confirmations = CAST($5 AS INTEGER), status = CASE 
-								WHEN CAST($5 AS INTEGER) >= $3 THEN 'confirmed' 
-								ELSE 'pending' 
-							END
+							SET block_hash = $1, 
+								block_height = $2, 
+								confirmations = CAST($1 - block_height + 1 AS INTEGER),
+								status = CASE 
+									WHEN CAST($1 - block_height + 1 AS INTEGER) >= $3 THEN 'confirmed' 
+									ELSE 'pending' 
+								END
 							WHERE id = $4
-						`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID, confirmations)
+						`, block.Height, block.Height, addrInfo.requiredConfirmations, existingTxID)
 						if err != nil {
-							log.Printf("Error updating pending transaction: %v", err)
-						} else {
-							log.Printf("Updated pending transaction %s with %d confirmations", tx.TxID, confirmations)
+							log.Printf("Error updating transaction: %v", err)
 						}
 					}
 				}
