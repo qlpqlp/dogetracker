@@ -152,27 +152,3 @@ func UpdateLastProcessedBlock(db *sql.DB, blockHash string, blockHeight int64) e
 	`, blockHash, blockHeight)
 	return err
 }
-
-// GetAllTrackedAddresses returns a list of all tracked addresses
-func GetAllTrackedAddresses(db *sql.DB) ([]string, error) {
-	rows, err := db.Query(`
-		SELECT address 
-		FROM tracked_addresses 
-		ORDER BY created_at DESC
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var addresses []string
-	for rows.Next() {
-		var addr string
-		if err := rows.Scan(&addr); err != nil {
-			return nil, err
-		}
-		addresses = append(addresses, addr)
-	}
-
-	return addresses, nil
-}

@@ -16,6 +16,7 @@ import (
 	"github.com/qlpqlp/dogetracker/pkg/chaser"
 	"github.com/qlpqlp/dogetracker/pkg/core"
 	"github.com/qlpqlp/dogetracker/pkg/mempool"
+	"github.com/qlpqlp/dogetracker/pkg/spec"
 	"github.com/qlpqlp/dogetracker/pkg/walker"
 	"github.com/qlpqlp/dogetracker/server/api"
 	serverdb "github.com/qlpqlp/dogetracker/server/db"
@@ -57,6 +58,248 @@ func getEnvIntOrDefault(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+// ProcessBlockTransactions processes all transactions in a block and updates the database
+func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain spec.Blockchain) error {
+	// Get all tracked addresses
+	rows, err := db.Query(`SELECT id, address FROM tracked_addresses`)
+	if err != nil {
+		return fmt.Errorf("failed to get tracked addresses: %v", err)
+	}
+	defer rows.Close()
+
+	// Create a map of tracked addresses for quick lookup
+	trackedAddrs := make(map[string]int64)
+	for rows.Next() {
+		var id int64
+		var addr string
+		if err := rows.Scan(&id, &addr); err != nil {
+			return fmt.Errorf("failed to scan tracked address: %v", err)
+		}
+		trackedAddrs[addr] = id
+	}
+
+	// Process each transaction in the block
+	for _, tx := range block.Block.Tx {
+		// Process outputs (incoming transactions)
+		for i, vout := range tx.VOut {
+			// Extract addresses from output script
+			scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
+			if scriptType == "" {
+				continue
+			}
+
+			if addrID, exists := trackedAddrs[string(addr)]; exists {
+				// Found a tracked address in the output
+				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
+
+				// Create unspent output record
+				unspentOutput := &serverdb.UnspentOutput{
+					AddressID: addrID,
+					TxID:      tx.TxID,
+					Vout:      i,
+					Amount:    amount,
+					Script:    doge.HexEncode(vout.Script),
+				}
+
+				// Add unspent output to database
+				if err := serverdb.AddUnspentOutput(db, unspentOutput); err != nil {
+					log.Printf("Error adding unspent output: %v", err)
+				}
+
+				// Create transaction record
+				transaction := &serverdb.Transaction{
+					AddressID:     addrID,
+					TxID:          tx.TxID,
+					BlockHash:     block.Hash,
+					BlockHeight:   block.Height,
+					Amount:        amount,
+					IsIncoming:    true,
+					Confirmations: 1, // First confirmation
+					Status:        "confirmed",
+				}
+
+				// Add transaction to database
+				if err := serverdb.AddTransaction(db, transaction); err != nil {
+					log.Printf("Error adding transaction: %v", err)
+				}
+			}
+		}
+
+		// Process inputs (outgoing transactions)
+		for _, vin := range tx.VIn {
+			// Skip coinbase transactions (they have empty TxID)
+			if len(vin.TxID) == 0 {
+				continue
+			}
+
+			// Get the previous transaction
+			txIDHex := doge.HexEncodeReversed(vin.TxID)
+			prevTxData, err := blockchain.GetRawTransaction(txIDHex)
+			if err != nil {
+				continue
+			}
+
+			// Decode previous transaction
+			prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+			if err != nil {
+				continue
+			}
+			prevTx := doge.DecodeTx(prevTxBytes)
+
+			// Check if the spent output belonged to a tracked address
+			if vin.VOut < uint32(len(prevTx.VOut)) {
+				prevOut := prevTx.VOut[vin.VOut]
+				scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+				if scriptType == "" {
+					continue
+				}
+
+				if addrID, exists := trackedAddrs[string(addr)]; exists {
+					// Found a tracked address in the input
+					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
+
+					// Remove the unspent output as it's now spent
+					if err := serverdb.RemoveUnspentOutput(db, addrID, txIDHex, int(vin.VOut)); err != nil {
+						log.Printf("Error removing unspent output: %v", err)
+					}
+
+					// Create transaction record
+					transaction := &serverdb.Transaction{
+						AddressID:     addrID,
+						TxID:          tx.TxID,
+						BlockHash:     block.Hash,
+						BlockHeight:   block.Height,
+						Amount:        amount,
+						IsIncoming:    false,
+						Confirmations: 1, // First confirmation
+						Status:        "confirmed",
+					}
+
+					// Add transaction to database
+					if err := serverdb.AddTransaction(db, transaction); err != nil {
+						log.Printf("Error adding transaction: %v", err)
+					}
+				}
+			}
+		}
+	}
+
+	// Update balances for all tracked addresses
+	for addr, addrID := range trackedAddrs {
+		// Get address details including unspent outputs
+		_, _, unspentOutputs, err := serverdb.GetAddressDetails(db, addr)
+		if err != nil {
+			log.Printf("Error getting address details: %v", err)
+			continue
+		}
+
+		// Calculate balance from unspent outputs
+		var balance float64
+		for _, output := range unspentOutputs {
+			balance += output.Amount
+		}
+
+		// Update address balance
+		if err := serverdb.UpdateAddressBalance(db, addrID, balance); err != nil {
+			log.Printf("Error updating address balance: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// HandleChainReorganization handles a chain reorganization by undoing transactions from invalid blocks
+func HandleChainReorganization(db *sql.DB, undo *walker.UndoForkBlocks) error {
+	// Get all tracked addresses
+	rows, err := db.Query(`SELECT id, address FROM tracked_addresses`)
+	if err != nil {
+		return fmt.Errorf("failed to get tracked addresses: %v", err)
+	}
+	defer rows.Close()
+
+	// Create a map of tracked addresses for quick lookup
+	trackedAddrs := make(map[string]int64)
+	for rows.Next() {
+		var id int64
+		var addr string
+		if err := rows.Scan(&id, &addr); err != nil {
+			return fmt.Errorf("failed to scan tracked address: %v", err)
+		}
+		trackedAddrs[addr] = id
+	}
+
+	// Remove transactions from invalid blocks
+	for _, blockHash := range undo.BlockHashes {
+		// Get all transactions from this block for tracked addresses
+		rows, err := db.Query(`
+			SELECT t.id, t.address_id, t.tx_id, t.amount, t.is_incoming, u.id, u.tx_id, u.vout
+			FROM transactions t
+			LEFT JOIN unspent_outputs u ON t.address_id = u.address_id AND t.tx_id = u.tx_id
+			WHERE t.block_hash = $1
+		`, blockHash)
+		if err != nil {
+			log.Printf("Error querying transactions for block %s: %v", blockHash, err)
+			continue
+		}
+		defer rows.Close()
+
+		// Process each transaction
+		for rows.Next() {
+			var txID int64
+			var addrID int64
+			var txHash string
+			var amount float64
+			var isIncoming bool
+			var unspentID sql.NullInt64
+			var unspentTxID sql.NullString
+			var unspentVout sql.NullInt64
+
+			err := rows.Scan(&txID, &addrID, &txHash, &amount, &isIncoming, &unspentID, &unspentTxID, &unspentVout)
+			if err != nil {
+				log.Printf("Error scanning transaction: %v", err)
+				continue
+			}
+
+			// If this is an incoming transaction, we need to remove the unspent output
+			if isIncoming && unspentID.Valid {
+				// Remove the unspent output
+				if err := serverdb.RemoveUnspentOutput(db, addrID, unspentTxID.String, int(unspentVout.Int64)); err != nil {
+					log.Printf("Error removing unspent output: %v", err)
+				}
+			}
+
+			// Delete the transaction
+			_, err = db.Exec(`DELETE FROM transactions WHERE id = $1`, txID)
+			if err != nil {
+				log.Printf("Error deleting transaction: %v", err)
+			}
+		}
+	}
+
+	// Update balances for all tracked addresses
+	for addr, addrID := range trackedAddrs {
+		// Get address details including transactions and unspent outputs
+		_, _, unspentOutputs, err := serverdb.GetAddressDetails(db, addr)
+		if err != nil {
+			log.Printf("Error getting address details: %v", err)
+			continue
+		}
+
+		// Calculate balance from unspent outputs
+		var balance float64
+		for _, output := range unspentOutputs {
+			balance += output.Amount
+		}
+
+		// Update address balance
+		if err := serverdb.UpdateAddressBalance(db, addrID, balance); err != nil {
+			log.Printf("Error updating address balance: %v", err)
+		}
+	}
+
+	return nil
 }
 
 func main() {
@@ -188,31 +431,25 @@ func main() {
 					if err := serverdb.UpdateLastProcessedBlock(db, b.Block.Hash, b.Block.Height); err != nil {
 						log.Printf("Failed to update last processed block: %v", err)
 					}
-					// TODO: Process block transactions and update database
-					// This will involve:
-					// 1. Checking each transaction for tracked addresses
-					// 2. Updating transaction records
-					// 3. Updating unspent outputs
-					// 4. Updating address balances
+
+					// Process block transactions and update database
+					if err := ProcessBlockTransactions(db, b.Block, blockchain); err != nil {
+						log.Printf("Failed to process block transactions: %v", err)
+					}
 				} else {
 					log.Printf("Undoing to: %v (%v)", b.Undo.ResumeFromBlock, b.Undo.LastValidHeight)
-					// TODO: Handle chain reorganization
-					// This will involve:
-					// 1. Removing transactions from invalid blocks
-					// 2. Updating unspent outputs
-					// 3. Recalculating balances
+
+					// Handle chain reorganization
+					if err := HandleChainReorganization(db, b.Undo); err != nil {
+						log.Printf("Failed to handle chain reorganization: %v", err)
+					}
 				}
 			}
 		}
 	}()
 
 	// Initialize mempool tracker
-	trackedAddresses, err := serverdb.GetAllTrackedAddresses(db)
-	if err != nil {
-		log.Printf("Failed to get tracked addresses: %v", err)
-		trackedAddresses = []string{} // Empty list if error
-	}
-	mempoolTracker := mempool.NewMempoolTracker(blockchain, db, trackedAddresses)
+	mempoolTracker := mempool.NewMempoolTracker(blockchain, db, []string{*dbName})
 	go mempoolTracker.Start(ctx)
 
 	// Hook ^C signal.
