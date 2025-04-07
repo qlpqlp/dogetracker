@@ -65,6 +65,7 @@ func main() {
 	rpcPass := flag.String("rpc-pass", getEnvOrDefault("DOGE_RPC_PASS", "dogecoin"), "Dogecoin RPC password")
 	zmqHost := flag.String("zmq-host", getEnvOrDefault("DOGE_ZMQ_HOST", "127.0.0.1"), "Dogecoin ZMQ host")
 	zmqPort := flag.Int("zmq-port", getEnvIntOrDefault("DOGE_ZMQ_PORT", 28332), "Dogecoin ZMQ port")
+	startBlock := flag.Int64("start-block", -1, "Block height to start processing from (-1 for last processed block)")
 
 	// PostgreSQL flags
 	dbHost := flag.String("db-host", getEnvOrDefault("DB_HOST", "localhost"), "PostgreSQL host")
@@ -129,16 +130,49 @@ func main() {
 	}
 	tipChanged := chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
 
+	// Get the last processed block or use the specified start block
+	var resumeFromBlock string
+	if *startBlock >= 0 {
+		// Use specified block height
+		blockHash, err := blockchain.GetBlockHash(*startBlock)
+		if err != nil {
+			log.Fatalf("Error getting block hash for height %d: %v", *startBlock, err)
+		}
+		resumeFromBlock = blockHash
+	} else {
+		// Get last processed block from database
+		lastHeight, lastHash, err := db.GetLastProcessedBlock(db)
+		if err != nil {
+			log.Printf("Error getting last processed block: %v", err)
+			// Start from genesis block if there's an error
+			genesisHash, err := blockchain.GetBlockHash(1)
+			if err != nil {
+				log.Fatalf("Error getting genesis block hash: %v", err)
+			}
+			resumeFromBlock = genesisHash
+		} else if lastHeight > 0 {
+			resumeFromBlock = lastHash
+		} else {
+			// Start from genesis block if no last block found
+			genesisHash, err := blockchain.GetBlockHash(1)
+			if err != nil {
+				log.Fatalf("Error getting genesis block hash: %v", err)
+			}
+			resumeFromBlock = genesisHash
+		}
+	}
+
 	// Walk the blockchain.
 	blocks, err := walker.WalkTheDoge(ctx, walker.WalkerOptions{
 		Chain:           &doge.DogeMainNetChain,
-		ResumeFromBlock: "0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f",
+		ResumeFromBlock: resumeFromBlock,
 		Client:          blockchain,
 		TipChanged:      tipChanged,
+		FullUndoBlocks:  true,
+		DB:              db,
 	})
 	if err != nil {
-		log.Printf("WalkTheDoge: %v", err)
-		os.Exit(1)
+		log.Fatalf("Error walking blockchain: %v", err)
 	}
 
 	// Process blocks and update database

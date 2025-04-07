@@ -92,6 +92,20 @@ func InitDB(db *sql.DB) error {
 		return err
 	}
 
+	// Create block_tracker table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS block_tracker (
+			id INTEGER PRIMARY KEY DEFAULT 1,
+			last_block_height BIGINT NOT NULL,
+			last_block_hash VARCHAR(64) NOT NULL,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			CONSTRAINT single_row CHECK (id = 1)
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
 	// Create indexes
 	_, err = db.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_transactions_address_id ON transactions(address_id);

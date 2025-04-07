@@ -2,12 +2,14 @@ package walker
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/dogeorg/doge"
 	"github.com/qlpqlp/dogetracker/pkg/spec"
+	"github.com/qlpqlp/dogetracker/server/db"
 )
 
 const (
@@ -42,6 +44,7 @@ type WalkerOptions struct {
 	Client          spec.Blockchain   // from NewCoreRPCClient()
 	TipChanged      chan string       // from TipChaser()
 	FullUndoBlocks  bool              // fully decode blocks in UndoForkBlocks (or just hash and height)
+	DB              *sql.DB           // database connection
 }
 
 // Private WalkTheDoge internal state.
@@ -53,6 +56,7 @@ type DogeWalker struct {
 	stop           <-chan struct{} // ctx.Done() channel.
 	stopping       bool            // set to exit the main loop.
 	fullUndoBlocks bool            // fully decode blocks in UndoForkBlocks
+	db             *sql.DB         // database connection
 }
 
 /*
@@ -82,6 +86,7 @@ func WalkTheDoge(ctx context.Context, opts WalkerOptions) (blocks chan BlockOrUn
 		tipChanged:     opts.TipChanged,
 		stop:           ctx.Done(),
 		fullUndoBlocks: opts.FullUndoBlocks,
+		db:             opts.DB,
 	}
 	err = c.verifyChain()
 	if err != nil {
@@ -157,6 +162,11 @@ func (c *DogeWalker) followTheChain(nextBlockHash string) (lastProcessed string)
 			c.output <- BlockOrUndo{Block: block}
 			lastProcessed = block.Hash
 			nextBlockHash = head.NextBlockHash
+
+			// After processing each block, update the last processed block in the database
+			if err := db.UpdateLastProcessedBlock(c.db, block.Height, block.Hash); err != nil {
+				log.Printf("Error updating last processed block: %v", err)
+			}
 		} else {
 			// This block is no longer on-chain.
 			// Roll back until we find a block that is on-chain.

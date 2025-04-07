@@ -127,3 +127,30 @@ func RemoveUnspentOutput(db *sql.DB, addressID int64, txID string, vout int) err
 	`, addressID, txID, vout)
 	return err
 }
+
+// GetLastProcessedBlock returns the last processed block height and hash
+func GetLastProcessedBlock(db *sql.DB) (height int64, hash string, err error) {
+	err = db.QueryRow(`
+		SELECT last_block_height, last_block_hash 
+		FROM block_tracker 
+		WHERE id = 1
+	`).Scan(&height, &hash)
+
+	if err == sql.ErrNoRows {
+		// If no record exists, return 0 height and empty hash
+		return 0, "", nil
+	}
+
+	return height, hash, err
+}
+
+// UpdateLastProcessedBlock updates the last processed block height and hash
+func UpdateLastProcessedBlock(db *sql.DB, height int64, hash string) error {
+	_, err := db.Exec(`
+		INSERT INTO block_tracker (id, last_block_height, last_block_hash, updated_at)
+		VALUES (1, $1, $2, CURRENT_TIMESTAMP)
+		ON CONFLICT (id) DO UPDATE 
+		SET last_block_height = $1, last_block_hash = $2, updated_at = CURRENT_TIMESTAMP
+	`, height, hash)
+	return err
+}
