@@ -82,7 +82,7 @@ func (s *Server) handleTrackAddress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get or create address and return details
-	addr, transactions, unspentOutputs, err := db.GetOrCreateAddressWithConfirmations(s.db, req.Address, req.RequiredConfirmations)
+	addr, transactions, unspentOutputs, err := db.GetOrCreateAddressWithDetails(s.db, req.Address, req.RequiredConfirmations)
 	if err != nil {
 		http.Error(w, "Error processing request", http.StatusInternalServerError)
 		return

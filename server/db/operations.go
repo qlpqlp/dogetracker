@@ -156,3 +156,58 @@ func UpdateLastProcessedBlock(db *sql.DB, blockHash string, blockHeight int64) e
 	`, blockHash, blockHeight)
 	return err
 }
+
+// GetOrCreateAddressWithDetails gets or creates an address and returns all its details
+func GetOrCreateAddressWithDetails(db *sql.DB, address string, requiredConfirmations int) (*TrackedAddress, []Transaction, []UnspentOutput, error) {
+	addr, err := GetOrCreateAddressWithConfirmations(db, address, requiredConfirmations)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Get transactions
+	rows, err := db.Query(`
+		SELECT id, address_id, tx_id, block_hash, block_height, amount, is_incoming, confirmations, status, created_at
+		FROM transactions
+		WHERE address_id = $1
+		ORDER BY created_at DESC
+	`, addr.ID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer rows.Close()
+
+	var transactions []Transaction
+	for rows.Next() {
+		var tx Transaction
+		err := rows.Scan(&tx.ID, &tx.AddressID, &tx.TxID, &tx.BlockHash, &tx.BlockHeight,
+			&tx.Amount, &tx.IsIncoming, &tx.Confirmations, &tx.Status, &tx.CreatedAt)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		transactions = append(transactions, tx)
+	}
+
+	// Get unspent outputs
+	rows, err = db.Query(`
+		SELECT id, address_id, tx_id, vout, amount, script, created_at
+		FROM unspent_outputs
+		WHERE address_id = $1
+	`, addr.ID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer rows.Close()
+
+	var unspentOutputs []UnspentOutput
+	for rows.Next() {
+		var output UnspentOutput
+		err := rows.Scan(&output.ID, &output.AddressID, &output.TxID, &output.Vout,
+			&output.Amount, &output.Script, &output.CreatedAt)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		unspentOutputs = append(unspentOutputs, output)
+	}
+
+	return addr, transactions, unspentOutputs, nil
+}
