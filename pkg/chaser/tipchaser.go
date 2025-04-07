@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dogeorg/dogewalker/pkg/spec"
+	"github.com/qlpqlp/dogetracker/pkg/spec"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/dogeorg/doge"
-	"github.com/dogeorg/dogewalker/pkg/spec"
+	"github.com/qlpqlp/dogetracker/pkg/spec"
 )
 
 const (
