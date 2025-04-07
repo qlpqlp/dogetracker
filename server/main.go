@@ -63,21 +63,28 @@ func getEnvIntOrDefault(key string, defaultValue int) int {
 // ProcessBlockTransactions processes all transactions in a block and updates the database
 func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain spec.Blockchain) error {
 	// Get all tracked addresses
-	rows, err := db.Query(`SELECT id, address FROM tracked_addresses`)
+	rows, err := db.Query(`SELECT id, address, required_confirmations FROM tracked_addresses`)
 	if err != nil {
 		return fmt.Errorf("failed to get tracked addresses: %v", err)
 	}
 	defer rows.Close()
 
 	// Create a map of tracked addresses for quick lookup
-	trackedAddrs := make(map[string]int64)
+	trackedAddrs := make(map[string]struct {
+		id                    int64
+		requiredConfirmations int
+	})
 	for rows.Next() {
 		var id int64
 		var addr string
-		if err := rows.Scan(&id, &addr); err != nil {
+		var requiredConfirmations int
+		if err := rows.Scan(&id, &addr, &requiredConfirmations); err != nil {
 			return fmt.Errorf("failed to scan tracked address: %v", err)
 		}
-		trackedAddrs[addr] = id
+		trackedAddrs[addr] = struct {
+			id                    int64
+			requiredConfirmations int
+		}{id, requiredConfirmations}
 	}
 
 	// Process each transaction in the block
@@ -90,13 +97,13 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 				continue
 			}
 
-			if addrID, exists := trackedAddrs[string(addr)]; exists {
+			if addrInfo, exists := trackedAddrs[string(addr)]; exists {
 				// Found a tracked address in the output
 				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
 
 				// Create unspent output record
 				unspentOutput := &serverdb.UnspentOutput{
-					AddressID: addrID,
+					AddressID: addrInfo.id,
 					TxID:      tx.TxID,
 					Vout:      i,
 					Amount:    amount,
@@ -113,19 +120,19 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 				err := db.QueryRow(`
 					SELECT id FROM transactions 
 					WHERE address_id = $1 AND tx_id = $2 AND status = 'pending'
-				`, addrID, tx.TxID).Scan(&existingTxID)
+				`, addrInfo.id, tx.TxID).Scan(&existingTxID)
 
 				if err == sql.ErrNoRows {
 					// Transaction doesn't exist, create a new one
 					transaction := &serverdb.Transaction{
-						AddressID:     addrID,
+						AddressID:     addrInfo.id,
 						TxID:          tx.TxID,
 						BlockHash:     block.Hash,
 						BlockHeight:   block.Height,
 						Amount:        amount,
 						IsIncoming:    true,
-						Confirmations: 1, // First confirmation
-						Status:        "confirmed",
+						Confirmations: 1,         // First confirmation
+						Status:        "pending", // Start as pending until required confirmations are met
 					}
 
 					// Add transaction to database
@@ -138,9 +145,12 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 					// Transaction exists as pending, update it
 					_, err = db.Exec(`
 						UPDATE transactions 
-						SET block_hash = $1, block_height = $2, confirmations = 1, status = 'confirmed'
-						WHERE id = $3
-					`, block.Hash, block.Height, existingTxID)
+						SET block_hash = $1, block_height = $2, confirmations = 1, status = CASE 
+							WHEN 1 >= $3 THEN 'confirmed' 
+							ELSE 'pending' 
+						END
+						WHERE id = $4
+					`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID)
 					if err != nil {
 						log.Printf("Error updating pending transaction: %v", err)
 					} else {
@@ -179,12 +189,12 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 					continue
 				}
 
-				if addrID, exists := trackedAddrs[string(addr)]; exists {
+				if addrInfo, exists := trackedAddrs[string(addr)]; exists {
 					// Found a tracked address in the input
 					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
 
 					// Remove the unspent output as it's now spent
-					if err := serverdb.RemoveUnspentOutput(db, addrID, txIDHex, int(vin.VOut)); err != nil {
+					if err := serverdb.RemoveUnspentOutput(db, addrInfo.id, txIDHex, int(vin.VOut)); err != nil {
 						log.Printf("Error removing unspent output: %v", err)
 					}
 
@@ -193,19 +203,19 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 					err := db.QueryRow(`
 						SELECT id FROM transactions 
 						WHERE address_id = $1 AND tx_id = $2 AND status = 'pending'
-					`, addrID, tx.TxID).Scan(&existingTxID)
+					`, addrInfo.id, tx.TxID).Scan(&existingTxID)
 
 					if err == sql.ErrNoRows {
 						// Transaction doesn't exist, create a new one
 						transaction := &serverdb.Transaction{
-							AddressID:     addrID,
+							AddressID:     addrInfo.id,
 							TxID:          tx.TxID,
 							BlockHash:     block.Hash,
 							BlockHeight:   block.Height,
 							Amount:        amount,
 							IsIncoming:    false,
-							Confirmations: 1, // First confirmation
-							Status:        "confirmed",
+							Confirmations: 1,         // First confirmation
+							Status:        "pending", // Start as pending until required confirmations are met
 						}
 
 						// Add transaction to database
@@ -218,9 +228,12 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 						// Transaction exists as pending, update it
 						_, err = db.Exec(`
 							UPDATE transactions 
-							SET block_hash = $1, block_height = $2, confirmations = 1, status = 'confirmed'
-							WHERE id = $3
-						`, block.Hash, block.Height, existingTxID)
+							SET block_hash = $1, block_height = $2, confirmations = 1, status = CASE 
+								WHEN 1 >= $3 THEN 'confirmed' 
+								ELSE 'pending' 
+							END
+							WHERE id = $4
+						`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID)
 						if err != nil {
 							log.Printf("Error updating pending transaction: %v", err)
 						} else {
@@ -233,7 +246,7 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 	}
 
 	// Update balances for all tracked addresses
-	for addr, addrID := range trackedAddrs {
+	for addr, addrInfo := range trackedAddrs {
 		// Get address details including unspent outputs
 		_, _, unspentOutputs, err := serverdb.GetAddressDetails(db, addr)
 		if err != nil {
@@ -248,7 +261,7 @@ func ProcessBlockTransactions(db *sql.DB, block *walker.ChainBlock, blockchain s
 		}
 
 		// Update address balance
-		if err := serverdb.UpdateAddressBalance(db, addrID, balance); err != nil {
+		if err := serverdb.UpdateAddressBalance(db, addrInfo.id, balance); err != nil {
 			log.Printf("Error updating address balance: %v", err)
 		}
 	}

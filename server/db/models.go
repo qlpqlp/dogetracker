@@ -7,11 +7,12 @@ import (
 
 // TrackedAddress represents a Dogecoin address being tracked
 type TrackedAddress struct {
-	ID        int64     `json:"id"`
-	Address   string    `json:"address"`
-	Balance   float64   `json:"balance"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                    int64     `json:"id"`
+	Address               string    `json:"address"`
+	Balance               float64   `json:"balance"`
+	RequiredConfirmations int       `json:"required_confirmations"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 // Transaction represents a Dogecoin transaction involving a tracked address
@@ -47,6 +48,7 @@ func InitDB(db *sql.DB) error {
 			id SERIAL PRIMARY KEY,
 			address VARCHAR(34) UNIQUE NOT NULL,
 			balance DECIMAL(20,8) NOT NULL DEFAULT 0,
+			required_confirmations INTEGER NOT NULL DEFAULT 1,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)

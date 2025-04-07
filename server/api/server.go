@@ -54,7 +54,8 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 type TrackRequest struct {
-	Address string `json:"address"`
+	Address               string `json:"address"`
+	RequiredConfirmations int    `json:"required_confirmations"`
 }
 
 type AddressResponse struct {
@@ -75,8 +76,13 @@ func (s *Server) handleTrackAddress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate required confirmations
+	if req.RequiredConfirmations < 1 {
+		req.RequiredConfirmations = 1 // Default to 1 if not specified or invalid
+	}
+
 	// Get or create address and return details
-	addr, transactions, unspentOutputs, err := db.GetAddressDetails(s.db, req.Address)
+	addr, transactions, unspentOutputs, err := db.GetOrCreateAddressWithConfirmations(s.db, req.Address, req.RequiredConfirmations)
 	if err != nil {
 		http.Error(w, "Error processing request", http.StatusInternalServerError)
 		return

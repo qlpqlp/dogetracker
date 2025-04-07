@@ -6,22 +6,26 @@ import (
 
 // DB operations for tracked addresses
 func GetOrCreateAddress(db *sql.DB, address string) (*TrackedAddress, error) {
+	return GetOrCreateAddressWithConfirmations(db, address, 1) // Default to 1 confirmation
+}
+
+func GetOrCreateAddressWithConfirmations(db *sql.DB, address string, requiredConfirmations int) (*TrackedAddress, error) {
 	var addr TrackedAddress
 
 	// Try to get existing address
 	err := db.QueryRow(`
-		SELECT id, address, balance, created_at, updated_at 
+		SELECT id, address, balance, required_confirmations, created_at, updated_at 
 		FROM tracked_addresses 
 		WHERE address = $1
-	`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.CreatedAt, &addr.UpdatedAt)
+	`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		// Create new address
 		err = db.QueryRow(`
-			INSERT INTO tracked_addresses (address, balance) 
-			VALUES ($1, 0) 
-			RETURNING id, address, balance, created_at, updated_at
-		`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.CreatedAt, &addr.UpdatedAt)
+			INSERT INTO tracked_addresses (address, balance, required_confirmations) 
+			VALUES ($1, 0, $2) 
+			RETURNING id, address, balance, required_confirmations, created_at, updated_at
+		`, address, requiredConfirmations).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -41,7 +45,7 @@ func GetAddressDetails(db *sql.DB, address string) (*TrackedAddress, []Transacti
 
 	// Get transactions
 	rows, err := db.Query(`
-		SELECT id, address_id, tx_id, block_hash, block_height, amount, is_incoming, confirmations, created_at
+		SELECT id, address_id, tx_id, block_hash, block_height, amount, is_incoming, confirmations, status, created_at
 		FROM transactions
 		WHERE address_id = $1
 		ORDER BY created_at DESC
@@ -55,7 +59,7 @@ func GetAddressDetails(db *sql.DB, address string) (*TrackedAddress, []Transacti
 	for rows.Next() {
 		var tx Transaction
 		err := rows.Scan(&tx.ID, &tx.AddressID, &tx.TxID, &tx.BlockHash, &tx.BlockHeight,
-			&tx.Amount, &tx.IsIncoming, &tx.Confirmations, &tx.CreatedAt)
+			&tx.Amount, &tx.IsIncoming, &tx.Confirmations, &tx.Status, &tx.CreatedAt)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -100,11 +104,11 @@ func UpdateAddressBalance(db *sql.DB, addressID int64, balance float64) error {
 // Add transaction
 func AddTransaction(db *sql.DB, tx *Transaction) error {
 	_, err := db.Exec(`
-		INSERT INTO transactions (address_id, tx_id, block_hash, block_height, amount, is_incoming, confirmations)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO transactions (address_id, tx_id, block_hash, block_height, amount, is_incoming, confirmations, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (address_id, tx_id) DO UPDATE 
-		SET block_hash = $3, block_height = $4, confirmations = $7
-	`, tx.AddressID, tx.TxID, tx.BlockHash, tx.BlockHeight, tx.Amount, tx.IsIncoming, tx.Confirmations)
+		SET block_hash = $3, block_height = $4, confirmations = $7, status = $8
+	`, tx.AddressID, tx.TxID, tx.BlockHash, tx.BlockHeight, tx.Amount, tx.IsIncoming, tx.Confirmations, tx.Status)
 	return err
 }
 

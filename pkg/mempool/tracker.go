@@ -91,9 +91,9 @@ func (t *MempoolTracker) checkMempool() error {
 			}
 
 			addrStr := string(addr)
-			log.Printf("Checking output address: %s", addrStr)
+			//log.Printf("Checking output address: %s", addrStr)
 			if t.trackedAddrs[addrStr] {
-				log.Printf("Found tracked address in output: %s", addrStr)
+				//log.Printf("Found tracked address in output: %s", addrStr)
 				// Found a tracked address in the output
 				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
 				transaction := &db.Transaction{
@@ -141,9 +141,9 @@ func (t *MempoolTracker) checkMempool() error {
 				}
 
 				addrStr := string(addr)
-				log.Printf("Checking input address: %s", addrStr)
+				//log.Printf("Checking input address: %s", addrStr)
 				if t.trackedAddrs[addrStr] {
-					log.Printf("Found tracked address in input: %s", addrStr)
+					//log.Printf("Found tracked address in input: %s", addrStr)
 					// Found a tracked address in the input
 					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
 					transaction := &db.Transaction{
