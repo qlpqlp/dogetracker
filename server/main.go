@@ -18,6 +18,7 @@ import (
 	"github.com/qlpqlp/dogetracker/pkg/mempool"
 	"github.com/qlpqlp/dogetracker/pkg/walker"
 	"github.com/qlpqlp/dogetracker/server/api"
+	serverdb "github.com/qlpqlp/dogetracker/server/db"
 )
 
 type Config struct {
@@ -37,8 +38,9 @@ type Config struct {
 	dbName string
 
 	// API configuration
-	apiPort  int
-	apiToken string
+	apiPort    int
+	apiToken   string
+	startBlock string
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
@@ -65,7 +67,6 @@ func main() {
 	rpcPass := flag.String("rpc-pass", getEnvOrDefault("DOGE_RPC_PASS", "dogecoin"), "Dogecoin RPC password")
 	zmqHost := flag.String("zmq-host", getEnvOrDefault("DOGE_ZMQ_HOST", "127.0.0.1"), "Dogecoin ZMQ host")
 	zmqPort := flag.Int("zmq-port", getEnvIntOrDefault("DOGE_ZMQ_PORT", 28332), "Dogecoin ZMQ port")
-	startBlock := flag.Int64("start-block", -1, "Block height to start processing from (-1 for last processed block)")
 
 	// PostgreSQL flags
 	dbHost := flag.String("db-host", getEnvOrDefault("DB_HOST", "localhost"), "PostgreSQL host")
@@ -77,24 +78,26 @@ func main() {
 	// API flags
 	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 8080), "API server port")
 	apiToken := flag.String("api-token", getEnvOrDefault("API_TOKEN", ""), "API bearer token for authentication")
+	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f"), "Starting block hash to begin processing from")
 
 	// Parse command line flags
 	flag.Parse()
 
 	config := Config{
-		rpcHost:  *rpcHost,
-		rpcPort:  *rpcPort,
-		rpcUser:  *rpcUser,
-		rpcPass:  *rpcPass,
-		zmqHost:  *zmqHost,
-		zmqPort:  *zmqPort,
-		dbHost:   *dbHost,
-		dbPort:   *dbPort,
-		dbUser:   *dbUser,
-		dbPass:   *dbPass,
-		dbName:   *dbName,
-		apiPort:  *apiPort,
-		apiToken: *apiToken,
+		rpcHost:    *rpcHost,
+		rpcPort:    *rpcPort,
+		rpcUser:    *rpcUser,
+		rpcPass:    *rpcPass,
+		zmqHost:    *zmqHost,
+		zmqPort:    *zmqPort,
+		dbHost:     *dbHost,
+		dbPort:     *dbPort,
+		dbUser:     *dbUser,
+		dbPass:     *dbPass,
+		dbName:     *dbName,
+		apiPort:    *apiPort,
+		apiToken:   *apiToken,
+		startBlock: *startBlock,
 	}
 
 	// Connect to PostgreSQL
@@ -105,6 +108,19 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
+
+	// Initialize database schema
+	if err := serverdb.InitDB(db); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+
+	// Get last processed block from database
+	lastBlockHash, _, err := serverdb.GetLastProcessedBlock(db)
+	if err != nil {
+		log.Printf("Failed to get last processed block: %v", err)
+		// Use default block if database query fails
+		lastBlockHash = *startBlock
+	}
 
 	// Start API server
 	apiServer := api.NewServer(db, config.apiToken)
@@ -130,49 +146,16 @@ func main() {
 	}
 	tipChanged := chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
 
-	// Get the last processed block or use the specified start block
-	var resumeFromBlock string
-	if *startBlock >= 0 {
-		// Use specified block height
-		blockHash, err := blockchain.GetBlockHash(*startBlock)
-		if err != nil {
-			log.Fatalf("Error getting block hash for height %d: %v", *startBlock, err)
-		}
-		resumeFromBlock = blockHash
-	} else {
-		// Get last processed block from database
-		lastHeight, lastHash, err := db.GetLastProcessedBlock(db)
-		if err != nil {
-			log.Printf("Error getting last processed block: %v", err)
-			// Start from genesis block if there's an error
-			genesisHash, err := blockchain.GetBlockHash(1)
-			if err != nil {
-				log.Fatalf("Error getting genesis block hash: %v", err)
-			}
-			resumeFromBlock = genesisHash
-		} else if lastHeight > 0 {
-			resumeFromBlock = lastHash
-		} else {
-			// Start from genesis block if no last block found
-			genesisHash, err := blockchain.GetBlockHash(1)
-			if err != nil {
-				log.Fatalf("Error getting genesis block hash: %v", err)
-			}
-			resumeFromBlock = genesisHash
-		}
-	}
-
 	// Walk the blockchain.
 	blocks, err := walker.WalkTheDoge(ctx, walker.WalkerOptions{
 		Chain:           &doge.DogeMainNetChain,
-		ResumeFromBlock: resumeFromBlock,
+		ResumeFromBlock: lastBlockHash,
 		Client:          blockchain,
 		TipChanged:      tipChanged,
-		FullUndoBlocks:  true,
-		DB:              db,
 	})
 	if err != nil {
-		log.Fatalf("Error walking blockchain: %v", err)
+		log.Printf("WalkTheDoge: %v", err)
+		os.Exit(1)
 	}
 
 	// Process blocks and update database
@@ -184,6 +167,10 @@ func main() {
 			case b := <-blocks:
 				if b.Block != nil {
 					log.Printf("Processing block: %v (%v)", b.Block.Hash, b.Block.Height)
+					// Update last processed block in database
+					if err := serverdb.UpdateLastProcessedBlock(db, b.Block.Hash, b.Block.Height); err != nil {
+						log.Printf("Failed to update last processed block: %v", err)
+					}
 					// TODO: Process block transactions and update database
 					// This will involve:
 					// 1. Checking each transaction for tracked addresses

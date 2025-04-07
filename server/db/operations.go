@@ -128,29 +128,27 @@ func RemoveUnspentOutput(db *sql.DB, addressID int64, txID string, vout int) err
 	return err
 }
 
-// GetLastProcessedBlock returns the last processed block height and hash
-func GetLastProcessedBlock(db *sql.DB) (height int64, hash string, err error) {
-	err = db.QueryRow(`
-		SELECT last_block_height, last_block_hash 
-		FROM block_tracker 
+// GetLastProcessedBlock returns the last processed block hash and height
+func GetLastProcessedBlock(db *sql.DB) (string, int64, error) {
+	var blockHash string
+	var blockHeight int64
+	err := db.QueryRow(`
+		SELECT block_hash, block_height 
+		FROM last_processed_block 
 		WHERE id = 1
-	`).Scan(&height, &hash)
-
-	if err == sql.ErrNoRows {
-		// If no record exists, return 0 height and empty hash
-		return 0, "", nil
+	`).Scan(&blockHash, &blockHeight)
+	if err != nil {
+		return "", 0, err
 	}
-
-	return height, hash, err
+	return blockHash, blockHeight, nil
 }
 
-// UpdateLastProcessedBlock updates the last processed block height and hash
-func UpdateLastProcessedBlock(db *sql.DB, height int64, hash string) error {
+// UpdateLastProcessedBlock updates the last processed block hash and height
+func UpdateLastProcessedBlock(db *sql.DB, blockHash string, blockHeight int64) error {
 	_, err := db.Exec(`
-		INSERT INTO block_tracker (id, last_block_height, last_block_hash, updated_at)
-		VALUES (1, $1, $2, CURRENT_TIMESTAMP)
-		ON CONFLICT (id) DO UPDATE 
-		SET last_block_height = $1, last_block_hash = $2, updated_at = CURRENT_TIMESTAMP
-	`, height, hash)
+		UPDATE last_processed_block 
+		SET block_hash = $1, block_height = $2, updated_at = CURRENT_TIMESTAMP 
+		WHERE id = 1
+	`, blockHash, blockHeight)
 	return err
 }

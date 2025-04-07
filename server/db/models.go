@@ -92,26 +92,36 @@ func InitDB(db *sql.DB) error {
 		return err
 	}
 
-	// Create block_tracker table
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS block_tracker (
-			id INTEGER PRIMARY KEY DEFAULT 1,
-			last_block_height BIGINT NOT NULL,
-			last_block_hash VARCHAR(64) NOT NULL,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			CONSTRAINT single_row CHECK (id = 1)
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
 	// Create indexes
 	_, err = db.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_transactions_address_id ON transactions(address_id);
 		CREATE INDEX IF NOT EXISTS idx_transactions_tx_id ON transactions(tx_id);
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_address_id ON unspent_outputs(address_id);
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_tx_id ON unspent_outputs(tx_id);
+	`)
+
+	if err != nil {
+		return err
+	}
+
+	// Create last_processed_block table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS last_processed_block (
+			id INTEGER PRIMARY KEY DEFAULT 1,
+			block_hash VARCHAR(64) NOT NULL,
+			block_height BIGINT NOT NULL,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Insert default row if not exists
+	_, err = db.Exec(`
+		INSERT INTO last_processed_block (id, block_hash, block_height)
+		VALUES (1, '0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f', 0)
+		ON CONFLICT (id) DO NOTHING
 	`)
 
 	return err
