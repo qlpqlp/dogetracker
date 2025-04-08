@@ -18,6 +18,77 @@ Much wow! DogeTracker is a Go application that tracks Dogecoin addresses, monito
 - PostgreSQL database (Such database, very PostgreSQL!)
 - Dogecoin node with RPC access (Many node, much Dogecoin!)
 
+## Installation and Setup
+
+### Installing Go
+
+#### Windows
+1. Download the Go installer from [golang.org](https://golang.org/dl/)
+2. Run the installer and follow the prompts
+3. Verify installation by opening a command prompt and running:
+   ```bash
+   go version
+   ```
+
+#### macOS
+```bash
+# Using Homebrew
+brew install go
+
+# Verify installation
+go version
+```
+
+#### Linux (Ubuntu/Debian)
+```bash
+# Add the repository
+sudo add-apt-repository ppa:longsleep/golang-backports
+sudo apt update
+
+# Install Go
+sudo apt install golang-go
+
+# Verify installation
+go version
+```
+
+### Compiling DogeTracker
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/dogetracker.git
+   cd dogetracker
+   ```
+
+2. Build the application:
+   ```bash
+   go build -o dogetracker
+   ```
+
+3. Run the application:
+   ```bash
+   ./dogetracker
+   ```
+
+### Running DogeTracker
+
+After compiling, you can run DogeTracker with default settings:
+
+```bash
+./dogetracker \
+  --db-host=localhost \
+  --db-port=5432 \
+  --db-user=postgres \
+  --db-pass=postgres \
+  --db-name=dogetracker \
+  --rpc-host=127.0.0.1 \
+  --rpc-port=22555 \
+  --rpc-user=dogecoin \
+  --rpc-pass=dogecoin \
+  --api-port=420 \
+  --api-token=your_api_token
+```
+
 ## Quick Start with Docker
 
 Much Docker, very container! Here's how to quickly set up the required PostgreSQL database using Docker:
