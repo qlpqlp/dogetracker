@@ -456,9 +456,9 @@ func main() {
 	dbName := flag.String("db-name", getEnvOrDefault("DB_NAME", "dogetracker"), "PostgreSQL database name")
 
 	// API flags
-	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 8080), "API server port")
+	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 420), "API server port")
 	apiToken := flag.String("api-token", getEnvOrDefault("API_TOKEN", ""), "API bearer token for authentication")
-	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f"), "Starting block hash or height to begin processing from")
+	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n"), "Starting block hash or height to begin processing from")
 
 	// Parse command line flags
 	flag.Parse()

@@ -18,14 +18,65 @@ Much wow! DogeTracker is a Go application that tracks Dogecoin addresses, monito
 - PostgreSQL database (Such database, very PostgreSQL!)
 - Dogecoin node with RPC access (Many node, much Dogecoin!)
 
+## Quick Start with Docker
+
+Much Docker, very container! Here's how to quickly set up the required PostgreSQL database using Docker:
+
+### Running PostgreSQL in Docker
+
+```bash
+# Run PostgreSQL container
+docker run --name postgres-dogetracker \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=dogetracker \
+  -d -p 5432:5432 postgres:15
+
+# Verify the container is running
+docker ps
+```
+
+This command:
+- Creates a PostgreSQL container named `postgres-dogetracker`
+- Sets the default username to `postgres`
+- Sets the password to `postgres`
+- Creates a database named `dogetracker`
+- Maps the container's port 5432 to the host's port 5432
+- Uses PostgreSQL version 15
+
+### Running DogeTracker with Docker PostgreSQL
+
+Once your PostgreSQL container is running, you can start DogeTracker with the default database settings:
+
+```bash
+./dogetracker \
+  --db-host=localhost \
+  --db-port=5432 \
+  --db-user=postgres \
+  --db-pass=postgres \
+  --db-name=dogetracker
+```
+
+Or if you prefer to use environment variables:
+
+```bash
+export DB_HOST=localhost
+export DB_PORT=5432
+export DB_USER=postgres
+export DB_PASS=postgres
+export DB_NAME=dogetracker
+./dogetracker
+```
+
 ## Configuration
 
 DogeTracker can be configured using command-line flags or environment variables:
 
 ```
 Usage of dogetracker:
+./dogetracker
   -api-port int
-        API server port (default 8080)
+        API server port (default 420)
   -api-token string
         API bearer token for authentication
   -db-host string
@@ -46,6 +97,8 @@ Usage of dogetracker:
         Dogecoin RPC port (default 22555)
   -rpc-user string
         Dogecoin RPC username (default "dogecoin")
+  -start-block string
+        Starting block hash or height to begin processing from (default "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n")
   -zmq-host string
         Dogecoin ZMQ host (default "127.0.0.1")
   -zmq-port int
@@ -66,7 +119,7 @@ Authorization: Bearer your_api_token
 Content-Type: application/json
 
 {
-  "address": "D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2",
+  "address": "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n",
   "required_confirmations": 3
 }
 ```
@@ -74,11 +127,11 @@ Content-Type: application/json
 #### cURL Example
 ```bash
 curl -X POST \
-  http://localhost:8080/api/track \
+  http://localhost:420/api/track \
   -H 'Authorization: Bearer your_api_token' \
   -H 'Content-Type: application/json' \
   -d '{
-    "address": "D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2",
+    "address": "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n",
     "required_confirmations": 3
 }'
 ```
@@ -87,13 +140,13 @@ curl -X POST \
 ```python
 import requests
 
-url = "http://localhost:8080/api/track"
+url = "http://localhost:420/api/track"
 headers = {
     "Authorization": "Bearer your_api_token",
     "Content-Type": "application/json"
 }
 data = {
-    "address": "D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2",
+    "address": "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n",
     "required_confirmations": 3
 }
 
@@ -101,19 +154,58 @@ response = requests.post(url, headers=headers, json=data)
 print(response.json())
 ```
 
+#### Example Response
+```json
+{
+  "address": {
+    "id": 1,
+    "address": "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n",
+    "balance": 1000.5,
+    "required_confirmations": 3,
+    "created_at": "2023-06-15T14:30:00Z",
+    "updated_at": "2023-06-15T14:30:00Z"
+  },
+  "transactions": [
+    {
+      "id": 1,
+      "address_id": 1,
+      "tx_id": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6",
+      "block_hash": "b1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q6r7s8t9u0v1w2x3y4z5a6",
+      "block_height": 4500000,
+      "amount": 1000.5,
+      "is_incoming": true,
+      "confirmations": 50,
+      "status": "confirmed",
+      "created_at": "2023-06-15T14:30:00Z"
+    }
+  ],
+  "unspent_outputs": [
+    {
+      "id": 1,
+      "address_id": 1,
+      "tx_id": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6",
+      "vout": 0,
+      "amount": 1000.5,
+      "script": "76a914a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a688ac",
+      "created_at": "2023-06-15T14:30:00Z"
+    }
+  ]
+}
+```
+
 ### Get address details
 
 Much details, very address! Get information about a tracked Dogecoin address:
 
 ```
-GET /api/address/D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2
+GET /api/address/DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n
 Authorization: Bearer your_api_token
 ```
 
 #### cURL Example
 ```bash
 curl -X GET \
-  http://localhost:8080/api/address/D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2 \
+  http://localhost:420/api/address/DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n \
   -H 'Authorization: Bearer your_api_token'
 ```
 
@@ -121,13 +213,64 @@ curl -X GET \
 ```python
 import requests
 
-url = "http://localhost:8080/api/address/D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2"
+url = "http://localhost:420/api/address/DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n"
 headers = {
     "Authorization": "Bearer your_api_token"
 }
 
 response = requests.get(url, headers=headers)
 print(response.json())
+```
+
+#### Example Response
+```json
+{
+  "address": {
+    "id": 1,
+    "address": "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n",
+    "balance": 1000.5,
+    "required_confirmations": 3,
+    "created_at": "2023-06-15T14:30:00Z",
+    "updated_at": "2023-06-15T14:30:00Z"
+  },
+  "transactions": [
+    {
+      "id": 1,
+      "address_id": 1,
+      "tx_id": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6",
+      "block_hash": "b1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q6r7s8t9u0v1w2x3y4z5a6",
+      "block_height": 4500000,
+      "amount": 1000.5,
+      "is_incoming": true,
+      "confirmations": 50,
+      "status": "confirmed",
+      "created_at": "2023-06-15T14:30:00Z"
+    },
+    {
+      "id": 2,
+      "address_id": 1,
+      "tx_id": "b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7",
+      "block_hash": null,
+      "block_height": null,
+      "amount": -500.0,
+      "is_incoming": false,
+      "confirmations": 0,
+      "status": "pending",
+      "created_at": "2023-06-16T10:15:00Z"
+    }
+  ],
+  "unspent_outputs": [
+    {
+      "id": 1,
+      "address_id": 1,
+      "tx_id": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6",
+      "vout": 0,
+      "amount": 1000.5,
+      "script": "76a914a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a688ac",
+      "created_at": "2023-06-15T14:30:00Z"
+    }
+  ]
+}
 ```
 
 ### Get all tracked addresses
@@ -142,7 +285,7 @@ Authorization: Bearer your_api_token
 #### cURL Example
 ```bash
 curl -X GET \
-  http://localhost:8080/api/addresses \
+  http://localhost:420/api/addresses \
   -H 'Authorization: Bearer your_api_token'
 ```
 
@@ -150,13 +293,35 @@ curl -X GET \
 ```python
 import requests
 
-url = "http://localhost:8080/api/addresses"
+url = "http://localhost:420/api/addresses"
 headers = {
     "Authorization": "Bearer your_api_token"
 }
 
 response = requests.get(url, headers=headers)
 print(response.json())
+```
+
+#### Example Response
+```json
+[
+  {
+    "id": 1,
+    "address": "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n",
+    "balance": 1000.5,
+    "required_confirmations": 3,
+    "created_at": "2023-06-15T14:30:00Z",
+    "updated_at": "2023-06-15T14:30:00Z"
+  },
+  {
+    "id": 2,
+    "address": "D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2",
+    "balance": 500.0,
+    "required_confirmations": 1,
+    "created_at": "2023-06-16T09:45:00Z",
+    "updated_at": "2023-06-16T09:45:00Z"
+  }
+]
 ```
 
 ### Get unspent outputs
@@ -164,14 +329,14 @@ print(response.json())
 Such outputs, very unspent! Get all unspent outputs for a tracked address:
 
 ```
-GET /api/address/D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2/unspent
+GET /api/address/DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n/unspent
 Authorization: Bearer your_api_token
 ```
 
 #### cURL Example
 ```bash
 curl -X GET \
-  http://localhost:8080/api/address/D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2/unspent \
+  http://localhost:420/api/address/DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n/unspent \
   -H 'Authorization: Bearer your_api_token'
 ```
 
@@ -179,7 +344,7 @@ curl -X GET \
 ```python
 import requests
 
-url = "http://localhost:8080/api/address/D8jfkhj4k3h2jk4h2jk4h2jk4h2jk4h2jk4h2/unspent"
+url = "http://localhost:420/api/address/DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n/unspent"
 headers = {
     "Authorization": "Bearer your_api_token"
 }
@@ -188,6 +353,42 @@ response = requests.get(url, headers=headers)
 print(response.json())
 ```
 
+#### Example Response
+```json
+[
+  {
+    "id": 1,
+    "address_id": 1,
+    "tx_id": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6",
+    "vout": 0,
+    "amount": 1000.5,
+    "script": "76a914a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a688ac",
+    "created_at": "2023-06-15T14:30:00Z"
+  },
+  {
+    "id": 2,
+    "address_id": 1,
+    "tx_id": "c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7b8",
+    "vout": 1,
+    "amount": 500.0,
+    "script": "76a914a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a688ac",
+    "created_at": "2023-06-16T11:20:00Z"
+  }
+]
+```
+
 ## License
 
 MIT - Much license, very open source!
+
+## Acknowledgments
+
+DogeTracker was inspired by [DogeWalker](https://github.com/dogeorg/dogewalker), a Go library for high-performance chain tracking against Dogecoin Core created by [@raffecat](https://github.com/raffecat) and [@tjstebbing](https://github.com/tjstebbing). Much inspiration, very thanks!
+
+## Future Plans
+
+DogeTracker will soon be ported as a PUP to [DogeBox](https://dogebox.dogecoin.org), making it even easier to deploy and manage. Stay tuned for updates!
+
+---
+
+*Much wow! Such tracking! Very Dogecoin!*
