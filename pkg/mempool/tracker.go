@@ -137,6 +137,20 @@ func (t *MempoolTracker) checkMempool() error {
 			continue
 		}
 
+		// Get transaction timestamp from mempool
+		mempoolData, err := t.client.GetMempoolTransaction(txid)
+		if err != nil {
+			log.Printf("Error getting mempool transaction data %s: %v", txid, err)
+			continue
+		}
+
+		// Get timestamp from mempool data
+		timestamp, ok := mempoolData["time"].(float64)
+		if !ok {
+			log.Printf("Error getting timestamp from mempool data for %s", txid)
+			continue
+		}
+
 		// Convert hex to bytes
 		txBytes, err := doge.HexDecode(txData["hex"].(string))
 		if err != nil {
@@ -197,6 +211,7 @@ func (t *MempoolTracker) checkMempool() error {
 						Confirmations:   0,
 						SenderAddress:   senderAddress,
 						ReceiverAddress: addrStr,
+						Timestamp:       int64(timestamp),
 					}
 
 					// Add transaction to database
@@ -267,6 +282,7 @@ func (t *MempoolTracker) checkMempool() error {
 							Confirmations:   0,
 							SenderAddress:   addrStr,
 							ReceiverAddress: receiverAddress,
+							Timestamp:       int64(timestamp),
 						}
 
 						// Add transaction to database
