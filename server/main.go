@@ -21,7 +21,6 @@ import (
 
 	"github.com/dogeorg/doge"
 	_ "github.com/lib/pq"
-	"github.com/qlpqlp/dogetracker/pkg/chaser"
 	"github.com/qlpqlp/dogetracker/pkg/core"
 	"github.com/qlpqlp/dogetracker/pkg/mempool"
 	"github.com/qlpqlp/dogetracker/pkg/spec"
@@ -603,18 +602,9 @@ func main() {
 	// Check if startBlock is a block height (numeric) or block hash
 	var startBlockHash string
 	if *startBlock == "" {
-		// No start block provided, use the last processed block from database or current best block
+		// No start block provided, use the last processed block from database
 		startBlockHash = lastBlockHash
-		log.Printf("No start block specified, using %s", startBlockHash)
-	} else if *startBlock == "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691" {
-		// Default block hash provided, get the current best block
-		startBlockHash, err = blockchain.GetBestBlockHash()
-		if err != nil {
-			log.Printf("Failed to get best block hash: %v", err)
-			startBlockHash = lastBlockHash // Fall back to last processed block
-		} else {
-			log.Printf("Default block hash specified, using current best block: %s", startBlockHash)
-		}
+		log.Printf("No start block specified, using last processed block: %s", startBlockHash)
 	} else if blockHeight, err := strconv.ParseInt(*startBlock, 10, 64); err == nil {
 		// It's a block height, get the corresponding block hash
 		startBlockHash, err = blockchain.GetBlockHash(blockHeight)
@@ -669,7 +659,33 @@ func main() {
 		log.Printf("CoreZMQListener: %v", err)
 		os.Exit(1)
 	}
-	tipChanged := chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
+
+	// Create a custom tip changed channel that only signals when we have the block in our database
+	tipChanged := make(chan string, 100)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case blockHash := <-zmqTip:
+				// Check if we have this block in our database
+				var exists bool
+				err := db.QueryRow(`
+					SELECT EXISTS (
+						SELECT 1 FROM last_processed_block 
+						WHERE block_hash = $1
+					)
+				`, blockHash).Scan(&exists)
+				if err != nil {
+					log.Printf("Error checking block existence: %v", err)
+					continue
+				}
+				if exists {
+					tipChanged <- blockHash
+				}
+			}
+		}
+	}()
 
 	// Walk the blockchain.
 	blocks, err := tracker.WalkTheDoge(ctx, tracker.TrackerOptions{
