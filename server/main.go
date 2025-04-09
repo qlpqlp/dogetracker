@@ -200,7 +200,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					END,
 					fee = $3,
 					timestamp = $4
-				WHERE txid = $5`,
+				WHERE tx_id = $5`,
 				block.Hash, block.Height, fee, txTimestamp, tx.TxID)
 			if err != nil {
 				log.Printf("Error updating transaction: %v", err)
@@ -219,7 +219,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 			// Insert new transaction
 			_, err = db.Exec(`
 				INSERT INTO transactions (
-					txid, address_id, amount, block_hash, block_height, 
+					tx_id, address_id, amount, block_hash, block_height, 
 					confirmations, status, required_confirmations, fee, timestamp
 				) 
 				SELECT $1, id, $2, $3, $4, 

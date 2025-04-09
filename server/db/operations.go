@@ -217,7 +217,7 @@ func TransactionExists(db *sql.DB, txid string) (bool, error) {
 	var exists bool
 	err := db.QueryRow(`
 		SELECT EXISTS (
-			SELECT 1 FROM transactions WHERE txid = $1
+			SELECT 1 FROM transactions WHERE tx_id = $1
 		)
 	`, txid).Scan(&exists)
 	return exists, err
