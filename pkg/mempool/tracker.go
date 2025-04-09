@@ -141,7 +141,6 @@ func (t *MempoolTracker) checkMempool() error {
 		mempoolData, err := t.client.GetMempoolTransaction(txid)
 		var timestamp float64
 		if err != nil {
-			log.Printf("Error getting mempool transaction data %s: %v", txid, err)
 			// Use current time as fallback
 			timestamp = float64(time.Now().Unix())
 		} else {
@@ -149,7 +148,6 @@ func (t *MempoolTracker) checkMempool() error {
 			var ok bool
 			timestamp, ok = mempoolData["time"].(float64)
 			if !ok {
-				log.Printf("Error getting timestamp from mempool data for %s", txid)
 				// Use current time as fallback
 				timestamp = float64(time.Now().Unix())
 			}

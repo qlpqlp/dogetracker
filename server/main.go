@@ -97,7 +97,9 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 	// Process each transaction in the block
 	log.Printf("Starting to process block %d with %d transactions", block.Height, len(block.Block.Tx))
-	for _, tx := range block.Block.Tx {
+	for txIndex, tx := range block.Block.Tx {
+		log.Printf("Processing %d/%d: %s", txIndex+1, len(block.Block.Tx), tx.TxID)
+
 		// Calculate transaction fee only if it involves a tracked address
 		var fee float64
 		var hasTrackedAddress bool
