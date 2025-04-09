@@ -125,34 +125,91 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 	// Process each transaction in the block
 	for _, tx := range block.Block.Tx {
-		// Calculate transaction fee
+		// Calculate transaction fee only if it involves a tracked address
 		var fee float64
-		if len(tx.VIn) > 0 {
-			// Sum all inputs
-			var totalInput float64
+		var hasTrackedAddress bool
+
+		// Check if any outputs are to tracked addresses
+		for _, vout := range tx.VOut {
+			scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
+			if scriptType == "" {
+				continue
+			}
+			if _, exists := trackedAddrs[string(addr)]; exists {
+				hasTrackedAddress = true
+				break
+			}
+		}
+
+		// Check if any inputs are from tracked addresses
+		if !hasTrackedAddress {
 			for _, vin := range tx.VIn {
 				if len(vin.TxID) > 0 { // Skip coinbase transactions
 					prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
-					if err == nil {
-						prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
-						if err == nil {
-							prevTx := doge.DecodeTx(prevTxBytes)
-							if int(vin.VOut) < len(prevTx.VOut) {
-								totalInput += float64(prevTx.VOut[vin.VOut].Value) / 1e8
-							}
+					if err != nil {
+						continue
+					}
+					prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+					if err != nil {
+						continue
+					}
+					prevTx := doge.DecodeTx(prevTxBytes)
+					if int(vin.VOut) < len(prevTx.VOut) {
+						prevOut := prevTx.VOut[vin.VOut]
+						scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+						if scriptType == "" {
+							continue
+						}
+						if _, exists := trackedAddrs[string(addr)]; exists {
+							hasTrackedAddress = true
+							break
 						}
 					}
 				}
 			}
+		}
 
-			// Sum all outputs
-			var totalOutput float64
-			for _, vout := range tx.VOut {
-				totalOutput += float64(vout.Value) / 1e8
+		// Only calculate fee if the transaction involves a tracked address
+		if hasTrackedAddress {
+			if len(tx.VIn) > 0 {
+				// Sum all inputs
+				var totalInput float64
+				var inputCount int
+				for _, vin := range tx.VIn {
+					if len(vin.TxID) > 0 { // Skip coinbase transactions
+						prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
+						if err != nil {
+							log.Printf("Error getting previous transaction %s: %v", doge.HexEncodeReversed(vin.TxID), err)
+							continue
+						}
+						prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+						if err != nil {
+							log.Printf("Error decoding previous transaction hex: %v", err)
+							continue
+						}
+						prevTx := doge.DecodeTx(prevTxBytes)
+						if int(vin.VOut) < len(prevTx.VOut) {
+							totalInput += float64(prevTx.VOut[vin.VOut].Value) / 1e8
+							inputCount++
+						}
+					}
+				}
+
+				// Sum all outputs
+				var totalOutput float64
+				for _, vout := range tx.VOut {
+					totalOutput += float64(vout.Value) / 1e8
+				}
+
+				// Only calculate fee if we successfully processed all inputs
+				if inputCount == len(tx.VIn) {
+					fee = totalInput - totalOutput
+				} else {
+					// If we couldn't get all inputs, use a default fee
+					fee = 0.01 // Default fee of 0.01 DOGE
+					log.Printf("Using default fee for transaction %s as some inputs could not be processed", tx.TxID)
+				}
 			}
-
-			// Fee is the difference between inputs and outputs
-			fee = totalInput - totalOutput
 		}
 
 		// Process outputs (incoming transactions)
