@@ -114,45 +114,49 @@ func (t *MempoolTracker) RefreshAddresses() error {
 	return nil
 }
 
-// checkMempool checks the mempool for transactions involving tracked addresses
 func (t *MempoolTracker) checkMempool() error {
-	// Refresh addresses from database
+	// First refresh the list of tracked addresses
 	if err := t.RefreshAddresses(); err != nil {
-		return fmt.Errorf("failed to refresh addresses: %v", err)
+		log.Printf("Error refreshing addresses: %v", err)
 	}
 
-	// Get all transactions in the mempool
+	// Get all transactions in mempool
 	txids, err := t.client.GetMempoolTransactions()
 	if err != nil {
-		return fmt.Errorf("failed to get mempool transactions: %v", err)
+		return err
 	}
+
+	log.Printf("Found %d transactions in mempool", len(txids))
 
 	// Process each transaction
 	for _, txid := range txids {
-		// Get raw transaction
-		rawTx, err := t.client.GetRawTransaction(txid)
+		// Get raw transaction hex
+		txData, err := t.client.GetRawTransaction(txid)
 		if err != nil {
-			// Transaction might have been confirmed or removed from mempool
+			log.Printf("Error getting raw transaction %s: %v", txid, err)
 			continue
 		}
 
-		// Decode transaction
-		txBytes, err := doge.HexDecode(rawTx["hex"].(string))
+		// Convert hex to bytes
+		txBytes, err := doge.HexDecode(txData["hex"].(string))
 		if err != nil {
-			log.Printf("Error decoding transaction %s: %v", txid, err)
+			log.Printf("Error decoding transaction hex: %v", err)
 			continue
 		}
+
+		// Decode transaction using doge package
 		tx := doge.DecodeTx(txBytes)
 
 		// Process outputs (incoming transactions)
-		for i, vout := range tx.VOut {
+		for _, vout := range tx.VOut {
 			// Extract addresses from output script
 			scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
 			if scriptType == "" {
 				continue
 			}
 
-			if addrInfo, exists := t.trackedAddrs[string(addr)]; exists {
+			addrStr := string(addr)
+			if addrInfo, exists := t.trackedAddrs[addrStr]; exists {
 				// Found a tracked address in the output
 				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
 
@@ -162,63 +166,45 @@ func (t *MempoolTracker) checkMempool() error {
 					// Get the first input's previous transaction
 					txIDHex := doge.HexEncodeReversed(tx.VIn[0].TxID)
 					prevTxData, err := t.client.GetRawTransaction(txIDHex)
-					if err != nil {
-						// Previous transaction might not be available
-						continue
+					if err == nil {
+						prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+						if err == nil {
+							prevTx := doge.DecodeTx(prevTxBytes)
+							if int(tx.VIn[0].VOut) < len(prevTx.VOut) {
+								prevOut := prevTx.VOut[tx.VIn[0].VOut]
+								_, senderAddr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+								senderAddress = string(senderAddr)
+							}
+						}
 					}
-					prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
-					if err != nil {
-						log.Printf("Error decoding previous transaction %s: %v", txIDHex, err)
-						continue
-					}
-					prevTx := doge.DecodeTx(prevTxBytes)
-					if int(tx.VIn[0].VOut) < len(prevTx.VOut) {
-						prevOut := prevTx.VOut[tx.VIn[0].VOut]
-						_, senderAddr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
-						senderAddress = string(senderAddr)
-					}
-				}
-
-				// Create unspent output record
-				unspentOutput := &db.UnspentOutput{
-					AddressID: addrInfo.id,
-					TxID:      tx.TxID,
-					Vout:      i,
-					Amount:    amount,
-					Script:    doge.HexEncode(vout.Script),
-				}
-
-				// Add unspent output to database
-				if err := db.AddUnspentOutput(t.db, unspentOutput); err != nil {
-					log.Printf("Error adding unspent output: %v", err)
 				}
 
 				// Check if this transaction already exists
 				var existingTxID int64
-				err = t.db.QueryRow(`
+				err := t.db.QueryRow(`
 					SELECT id FROM transactions 
 					WHERE address_id = $1 AND tx_id = $2
-				`, addrInfo.id, tx.TxID).Scan(&existingTxID)
+				`, addrInfo.id, txid).Scan(&existingTxID)
 
 				if err == sql.ErrNoRows {
 					// Transaction doesn't exist, create a new one
 					transaction := &db.Transaction{
 						AddressID:       addrInfo.id,
-						TxID:            tx.TxID,
+						TxID:            txid,
 						Amount:          amount,
 						IsIncoming:      true,
-						Confirmations:   0,
 						Status:          "pending",
+						Confirmations:   0,
 						SenderAddress:   senderAddress,
-						ReceiverAddress: string(addr),
+						ReceiverAddress: addrStr,
 					}
 
 					// Add transaction to database
 					if err := db.AddTransaction(t.db, transaction); err != nil {
-						log.Printf("Error adding transaction: %v", err)
+						log.Printf("Error adding pending transaction: %v", err)
+					} else {
+						log.Printf("Added pending transaction for address %s: %s", addrStr, txid)
 					}
-				} else if err != nil {
-					log.Printf("Error checking for existing transaction: %v", err)
 				}
 			}
 		}
@@ -234,14 +220,11 @@ func (t *MempoolTracker) checkMempool() error {
 			txIDHex := doge.HexEncodeReversed(vin.TxID)
 			prevTxData, err := t.client.GetRawTransaction(txIDHex)
 			if err != nil {
-				// Previous transaction might not be available
 				continue
 			}
 
-			// Decode previous transaction
 			prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
 			if err != nil {
-				log.Printf("Error decoding previous transaction %s: %v", txIDHex, err)
 				continue
 			}
 			prevTx := doge.DecodeTx(prevTxBytes)
@@ -254,7 +237,8 @@ func (t *MempoolTracker) checkMempool() error {
 					continue
 				}
 
-				if addrInfo, exists := t.trackedAddrs[string(addr)]; exists {
+				addrStr := string(addr)
+				if addrInfo, exists := t.trackedAddrs[addrStr]; exists {
 					// Found a tracked address in the input
 					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
 
@@ -265,37 +249,32 @@ func (t *MempoolTracker) checkMempool() error {
 						receiverAddress = string(receiverAddr)
 					}
 
-					// Remove the unspent output as it's now spent
-					if err := db.RemoveUnspentOutput(t.db, addrInfo.id, txIDHex, int(vin.VOut)); err != nil {
-						log.Printf("Error removing unspent output: %v", err)
-					}
-
 					// Check if this transaction already exists
 					var existingTxID int64
 					err := t.db.QueryRow(`
 						SELECT id FROM transactions 
 						WHERE address_id = $1 AND tx_id = $2
-					`, addrInfo.id, tx.TxID).Scan(&existingTxID)
+					`, addrInfo.id, txid).Scan(&existingTxID)
 
 					if err == sql.ErrNoRows {
 						// Transaction doesn't exist, create a new one
 						transaction := &db.Transaction{
 							AddressID:       addrInfo.id,
-							TxID:            tx.TxID,
+							TxID:            txid,
 							Amount:          amount,
 							IsIncoming:      false,
-							Confirmations:   0,
 							Status:          "pending",
-							SenderAddress:   string(addr),
+							Confirmations:   0,
+							SenderAddress:   addrStr,
 							ReceiverAddress: receiverAddress,
 						}
 
 						// Add transaction to database
 						if err := db.AddTransaction(t.db, transaction); err != nil {
-							log.Printf("Error adding transaction: %v", err)
+							log.Printf("Error adding pending transaction: %v", err)
+						} else {
+							log.Printf("Added pending transaction for address %s: %s", addrStr, txid)
 						}
-					} else if err != nil {
-						log.Printf("Error checking for existing transaction: %v", err)
 					}
 				}
 			}
