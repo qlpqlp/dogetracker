@@ -128,7 +128,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 				prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
 				if err != nil {
-					log.Printf("Error getting previous transaction %s: %v", doge.HexEncodeReversed(vin.TxID), err)
+					// Skip coinbase transactions silently
 					continue
 				}
 				prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
@@ -169,7 +169,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 					prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
 					if err != nil {
-						log.Printf("Error getting previous transaction %s: %v", doge.HexEncodeReversed(vin.TxID), err)
+						// Skip coinbase transactions silently
 						continue
 					}
 					prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
