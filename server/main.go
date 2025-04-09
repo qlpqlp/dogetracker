@@ -540,7 +540,7 @@ func main() {
 	// API flags
 	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 420), "API server port")
 	apiToken := flag.String("api-token", getEnvOrDefault("API_TOKEN", ""), "API bearer token for authentication")
-	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691"), "Starting block hash or height to begin processing from")
+	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", ""), "Starting block hash or height to begin processing from")
 
 	// Parse command line flags
 	flag.Parse()
@@ -585,13 +585,37 @@ func main() {
 	lastBlockHash, lastBlockHeight, err := serverdb.GetLastProcessedBlock(db)
 	if err != nil {
 		log.Printf("Failed to get last processed block: %v", err)
-		// If no database block exists, get the current best block
-		lastBlockHash, err = blockchain.GetBestBlockHash()
-		if err != nil {
-			log.Printf("Failed to get best block hash: %v", err)
-			lastBlockHash = *startBlock // Fall back to default block
+		// If no database block exists, use the start-block flag if provided
+		if *startBlock != "" {
+			// Check if startBlock is a block height (numeric) or block hash
+			if blockHeight, err := strconv.ParseInt(*startBlock, 10, 64); err == nil {
+				// It's a block height, get the corresponding block hash
+				lastBlockHash, err = blockchain.GetBlockHash(blockHeight)
+				if err != nil {
+					log.Printf("Failed to get block hash for height %d: %v", blockHeight, err)
+					// Fall back to current best block
+					lastBlockHash, err = blockchain.GetBestBlockHash()
+					if err != nil {
+						log.Printf("Failed to get best block hash: %v", err)
+						lastBlockHash = "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691" // Fall back to default block
+					}
+				} else {
+					log.Printf("Starting from block height %d (hash: %s)", blockHeight, lastBlockHash)
+				}
+			} else {
+				// It's already a block hash
+				lastBlockHash = *startBlock
+				log.Printf("Starting from block hash: %s", lastBlockHash)
+			}
 		} else {
-			log.Printf("No database block found, starting from current best block: %s", lastBlockHash)
+			// No start block specified, get the current best block
+			lastBlockHash, err = blockchain.GetBestBlockHash()
+			if err != nil {
+				log.Printf("Failed to get best block hash: %v", err)
+				lastBlockHash = "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691" // Fall back to default block
+			} else {
+				log.Printf("No database block found, starting from current best block: %s", lastBlockHash)
+			}
 		}
 	} else {
 		log.Printf("Found last processed block in database: %s (height: %d)", lastBlockHash, lastBlockHeight)
@@ -599,26 +623,9 @@ func main() {
 
 	ctx, shutdown := context.WithCancel(context.Background())
 
-	// Check if startBlock is a block height (numeric) or block hash
-	var startBlockHash string
-	if *startBlock == "" {
-		// No start block provided, use the last processed block from database
-		startBlockHash = lastBlockHash
-		log.Printf("No start block specified, using last processed block: %s", startBlockHash)
-	} else if blockHeight, err := strconv.ParseInt(*startBlock, 10, 64); err == nil {
-		// It's a block height, get the corresponding block hash
-		startBlockHash, err = blockchain.GetBlockHash(blockHeight)
-		if err != nil {
-			log.Printf("Failed to get block hash for height %d: %v", blockHeight, err)
-			startBlockHash = lastBlockHash // Fall back to last processed block
-		} else {
-			log.Printf("Starting from block height %d (hash: %s)", blockHeight, startBlockHash)
-		}
-	} else {
-		// It's already a block hash
-		startBlockHash = *startBlock
-		log.Printf("Starting from block hash: %s", startBlockHash)
-	}
+	// Always use the last processed block from database if it exists
+	startBlockHash := lastBlockHash
+	log.Printf("Starting from block hash: %s", startBlockHash)
 
 	// Get tracked addresses from database
 	rows, err := db.Query(`SELECT address FROM tracked_addresses`)
