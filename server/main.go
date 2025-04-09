@@ -209,6 +209,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 		} else {
 			// Extract address from the first output
 			var address string
+			var senderAddress string
 			if len(tx.VOut) > 0 {
 				scriptType, addr := doge.ClassifyScript(tx.VOut[0].Script, &doge.DogeMainNetChain)
 				if scriptType != "" {
@@ -216,19 +217,40 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 				}
 			}
 
+			// Try to get sender address from inputs
+			if len(tx.VIn) > 0 && len(tx.VIn[0].TxID) > 0 {
+				// Get the first input's previous transaction
+				txIDHex := doge.HexEncodeReversed(tx.VIn[0].TxID)
+				prevTx, err := blockchain.GetRawTransaction(txIDHex)
+				if err == nil {
+					prevTxBytes, err := doge.HexDecode(prevTx["hex"].(string))
+					if err == nil {
+						decodedPrevTx := doge.DecodeTx(prevTxBytes)
+						if int(tx.VIn[0].VOut) < len(decodedPrevTx.VOut) {
+							prevOut := decodedPrevTx.VOut[tx.VIn[0].VOut]
+							scriptType, senderAddr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+							if scriptType != "" {
+								senderAddress = string(senderAddr)
+							}
+						}
+					}
+				}
+			}
+
 			// Insert new transaction
 			_, err = db.Exec(`
 				INSERT INTO transactions (
 					tx_id, address_id, amount, block_hash, block_height, 
-					confirmations, status, required_confirmations, fee, timestamp
+					confirmations, status, fee, timestamp, is_incoming,
+					sender_address, receiver_address
 				) 
 				SELECT $1, id, $2, $3, $4, 
 					CASE WHEN $4 IS NOT NULL THEN 1 ELSE 0 END,
 					CASE WHEN $4 IS NOT NULL AND 1 >= required_confirmations THEN 'confirmed' ELSE 'pending' END,
-					required_confirmations, $5, $6
-				FROM addresses 
+					$5, $6, $8, $9, $10
+				FROM tracked_addresses 
 				WHERE address = $7`,
-				tx.TxID, totalOutput, block.Hash, block.Height, fee, txTimestamp, address)
+				tx.TxID, totalOutput, block.Hash, block.Height, fee, txTimestamp, address, true, senderAddress, address)
 			if err != nil {
 				log.Printf("Error adding transaction: %v", err)
 				continue
