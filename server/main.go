@@ -97,15 +97,12 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 	// Process each transaction in the block
 	log.Printf("Starting to process block %d with %d transactions", block.Height, len(block.Block.Tx))
-	for txIndex, tx := range block.Block.Tx {
-		log.Printf("Processing transaction %d/%d: %s", txIndex+1, len(block.Block.Tx), tx.TxID)
-
+	for _, tx := range block.Block.Tx {
 		// Calculate transaction fee only if it involves a tracked address
 		var fee float64
 		var hasTrackedAddress bool
 
 		// First check outputs for tracked addresses
-		log.Printf("Checking outputs for tracked addresses in transaction %s", tx.TxID)
 		for _, vout := range tx.VOut {
 			// Extract address from script
 			scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
@@ -121,32 +118,34 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 		// If no tracked addresses in outputs, check inputs
 		if !hasTrackedAddress {
-			log.Printf("No tracked addresses in outputs, checking inputs for transaction %s", tx.TxID)
 			for _, vin := range tx.VIn {
-				if len(vin.TxID) > 0 { // Skip coinbase transactions
-					prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
-					if err != nil {
-						log.Printf("Error getting previous transaction %s: %v", doge.HexEncodeReversed(vin.TxID), err)
+				// Skip coinbase transactions (they have empty TxID)
+				if len(vin.TxID) == 0 {
+					continue
+				}
+
+				prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
+				if err != nil {
+					log.Printf("Error getting previous transaction %s: %v", doge.HexEncodeReversed(vin.TxID), err)
+					continue
+				}
+				prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+				if err != nil {
+					log.Printf("Error decoding previous transaction hex: %v", err)
+					continue
+				}
+				prevTx := doge.DecodeTx(prevTxBytes)
+				if int(vin.VOut) < len(prevTx.VOut) {
+					prevOut := prevTx.VOut[vin.VOut]
+					// Extract address from script
+					scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+					if scriptType == "" {
 						continue
 					}
-					prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
-					if err != nil {
-						log.Printf("Error decoding previous transaction hex: %v", err)
-						continue
-					}
-					prevTx := doge.DecodeTx(prevTxBytes)
-					if int(vin.VOut) < len(prevTx.VOut) {
-						prevOut := prevTx.VOut[vin.VOut]
-						// Extract address from script
-						scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
-						if scriptType == "" {
-							continue
-						}
-						if _, exists := trackedAddrs[string(addr)]; exists {
-							hasTrackedAddress = true
-							log.Printf("Found tracked address in input: %s", string(addr))
-							break
-						}
+					if _, exists := trackedAddrs[string(addr)]; exists {
+						hasTrackedAddress = true
+						log.Printf("Found tracked address in input: %s", string(addr))
+						break
 					}
 				}
 			}
@@ -161,22 +160,25 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 				var totalInput float64
 				var inputCount int
 				for _, vin := range tx.VIn {
-					if len(vin.TxID) > 0 { // Skip coinbase transactions
-						prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
-						if err != nil {
-							log.Printf("Error getting previous transaction %s: %v", doge.HexEncodeReversed(vin.TxID), err)
-							continue
-						}
-						prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
-						if err != nil {
-							log.Printf("Error decoding previous transaction hex: %v", err)
-							continue
-						}
-						prevTx := doge.DecodeTx(prevTxBytes)
-						if int(vin.VOut) < len(prevTx.VOut) {
-							totalInput += float64(prevTx.VOut[vin.VOut].Value) / 1e8
-							inputCount++
-						}
+					// Skip coinbase transactions (they have empty TxID)
+					if len(vin.TxID) == 0 {
+						continue
+					}
+
+					prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
+					if err != nil {
+						log.Printf("Error getting previous transaction %s: %v", doge.HexEncodeReversed(vin.TxID), err)
+						continue
+					}
+					prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+					if err != nil {
+						log.Printf("Error decoding previous transaction hex: %v", err)
+						continue
+					}
+					prevTx := doge.DecodeTx(prevTxBytes)
+					if int(vin.VOut) < len(prevTx.VOut) {
+						totalInput += float64(prevTx.VOut[vin.VOut].Value) / 1e8
+						inputCount++
 					}
 				}
 
@@ -198,7 +200,6 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 			}
 
 			// Process outputs (incoming transactions)
-			log.Printf("Processing outputs for transaction %s", tx.TxID)
 			for i, vout := range tx.VOut {
 				// Extract address from script
 				scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
@@ -322,7 +323,6 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 			}
 
 			// Process inputs (outgoing transactions)
-			log.Printf("Processing inputs for transaction %s", tx.TxID)
 			for _, vin := range tx.VIn {
 				// Skip coinbase transactions (they have empty TxID)
 				if len(vin.TxID) == 0 {
@@ -447,8 +447,6 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					}
 				}
 			}
-		} else {
-			log.Printf("Transaction %s does not involve any tracked addresses, skipping", tx.TxID)
 		}
 	}
 	log.Printf("Finished processing block %d", block.Height)
