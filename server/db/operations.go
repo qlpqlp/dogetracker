@@ -104,11 +104,11 @@ func UpdateAddressBalance(db *sql.DB, addressID int64, balance float64) error {
 // Add transaction
 func AddTransaction(db *sql.DB, tx *Transaction) error {
 	_, err := db.Exec(`
-		INSERT INTO transactions (address_id, tx_id, block_hash, block_height, amount, is_incoming, confirmations, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO transactions (address_id, tx_id, block_hash, block_height, amount, fee, timestamp, is_incoming, confirmations, status, sender_address, receiver_address)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (address_id, tx_id) DO UPDATE 
-		SET block_hash = $3, block_height = $4, confirmations = $7, status = $8
-	`, tx.AddressID, tx.TxID, tx.BlockHash, tx.BlockHeight, tx.Amount, tx.IsIncoming, tx.Confirmations, tx.Status)
+		SET block_hash = $3, block_height = $4, amount = $5, fee = $6, timestamp = $7, is_incoming = $8, confirmations = $9, status = $10, sender_address = $11, receiver_address = $12
+	`, tx.AddressID, tx.TxID, tx.BlockHash, tx.BlockHeight, tx.Amount, tx.Fee, tx.Timestamp, tx.IsIncoming, tx.Confirmations, tx.Status, tx.SenderAddress, tx.ReceiverAddress)
 	return err
 }
 
