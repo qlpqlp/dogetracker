@@ -107,6 +107,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 		// First check outputs for tracked addresses
 		log.Printf("Checking outputs for tracked addresses in transaction %s", tx.TxID)
 		for _, vout := range tx.VOut {
+			// Extract address from script
 			scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
 			if scriptType == "" {
 				continue
@@ -136,6 +137,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					prevTx := doge.DecodeTx(prevTxBytes)
 					if int(vin.VOut) < len(prevTx.VOut) {
 						prevOut := prevTx.VOut[vin.VOut]
+						// Extract address from script
 						scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
 						if scriptType == "" {
 							continue
@@ -198,6 +200,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 			// Process outputs (incoming transactions)
 			log.Printf("Processing outputs for transaction %s", tx.TxID)
 			for i, vout := range tx.VOut {
+				// Extract address from script
 				scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
 				if scriptType == "" {
 					continue
@@ -334,7 +337,6 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					continue
 				}
 
-				// Decode previous transaction
 				prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
 				if err != nil {
 					log.Printf("Error decoding previous transaction hex: %v", err)
@@ -345,6 +347,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 				// Check if the spent output belonged to a tracked address
 				if vin.VOut < uint32(len(prevTx.VOut)) {
 					prevOut := prevTx.VOut[vin.VOut]
+					// Extract address from script
 					scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
 					if scriptType == "" {
 						continue
