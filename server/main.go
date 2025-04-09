@@ -595,7 +595,28 @@ func main() {
 						// Update the start block hash for the next iteration
 						startBlockHash = blockHeader.NextBlockHash
 					} else {
-						log.Printf("Reached the end of the blockchain")
+						// We've reached the current block, wait for new blocks
+						log.Printf("Reached current block, waiting for new blocks...")
+						// Get the current best block hash
+						bestBlockHash, err := blockchain.GetBestBlockHash()
+						if err != nil {
+							log.Printf("Error getting best block hash: %v", err)
+							continue
+						}
+						// If we're not at the best block yet, continue processing
+						if bestBlockHash != b.Block.Hash {
+							startBlockHash = bestBlockHash
+							log.Printf("New block found, continuing to process: %s", bestBlockHash)
+						} else {
+							// We're at the best block, wait for the next block notification
+							select {
+							case <-ctx.Done():
+								return
+							case newBlockHash := <-tipChanged:
+								startBlockHash = newBlockHash
+								log.Printf("New block notification received, continuing to process: %s", newBlockHash)
+							}
+						}
 					}
 				} else {
 					log.Printf("Undoing to: %v (%v)", b.Undo.ResumeFromBlock, b.Undo.LastValidHeight)
