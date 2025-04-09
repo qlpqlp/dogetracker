@@ -606,6 +606,15 @@ func main() {
 		// No start block provided, use the last processed block from database or current best block
 		startBlockHash = lastBlockHash
 		log.Printf("No start block specified, using %s", startBlockHash)
+	} else if *startBlock == "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691" {
+		// Default block hash provided, get the current best block
+		startBlockHash, err = blockchain.GetBestBlockHash()
+		if err != nil {
+			log.Printf("Failed to get best block hash: %v", err)
+			startBlockHash = lastBlockHash // Fall back to last processed block
+		} else {
+			log.Printf("Default block hash specified, using current best block: %s", startBlockHash)
+		}
 	} else if blockHeight, err := strconv.ParseInt(*startBlock, 10, 64); err == nil {
 		// It's a block height, get the corresponding block hash
 		startBlockHash, err = blockchain.GetBlockHash(blockHeight)
