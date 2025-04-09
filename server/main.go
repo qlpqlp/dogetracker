@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/dogeorg/doge"
 	_ "github.com/lib/pq"
@@ -126,281 +127,111 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 	for _, tx := range block.Block.Tx {
 		// Calculate transaction fee
 		var fee float64
-		if len(tx.VIn) > 0 {
-			// Sum all inputs
-			var totalInputs float64
-			for _, vin := range tx.VIn {
-				if len(vin.TxID) == 0 {
-					continue // Skip coinbase transactions
-				}
-				prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
-				if err != nil {
-					continue
-				}
-				prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
-				if err != nil {
-					continue
-				}
-				prevTx := doge.DecodeTx(prevTxBytes)
-				if int(vin.VOut) < len(prevTx.VOut) {
-					totalInputs += float64(prevTx.VOut[vin.VOut].Value) / 1e8
-				}
-			}
+		var totalInput float64
+		var totalOutput float64
 
-			// Sum all outputs
-			var totalOutputs float64
-			for _, vout := range tx.VOut {
-				totalOutputs += float64(vout.Value) / 1e8
+		// Sum up all inputs
+		for _, input := range tx.VIn {
+			if len(input.TxID) == 0 {
+				continue // Skip coinbase transactions
 			}
-
-			// Fee is the difference between inputs and outputs
-			fee = totalInputs - totalOutputs
+			// Get the previous transaction output value
+			prevTx, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(input.TxID))
+			if err != nil {
+				log.Printf("Error getting previous transaction %s: %v", doge.HexEncodeReversed(input.TxID), err)
+				continue
+			}
+			prevTxBytes, err := doge.HexDecode(prevTx["hex"].(string))
+			if err != nil {
+				log.Printf("Error decoding previous transaction: %v", err)
+				continue
+			}
+			decodedPrevTx := doge.DecodeTx(prevTxBytes)
+			if int(input.VOut) < len(decodedPrevTx.VOut) {
+				totalInput += float64(decodedPrevTx.VOut[input.VOut].Value) / 1e8
+			}
 		}
 
-		// Get transaction timestamp from block header
+		// Sum up all outputs
+		for _, output := range tx.VOut {
+			totalOutput += float64(output.Value) / 1e8
+		}
+
+		// Fee is the difference between inputs and outputs
+		fee = totalInput - totalOutput
+
+		// Get block header to get the block time
 		blockHeader, err := blockchain.GetBlockHeader(block.Hash)
 		if err != nil {
 			log.Printf("Error getting block header: %v", err)
 			continue
 		}
-		timestamp := int64(blockHeader.Time)
+		txTimestamp := time.Unix(int64(blockHeader.Time), 0)
 
-		// Process outputs (incoming transactions)
-		for i, vout := range tx.VOut {
-			// Extract addresses from output script
-			scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
-			if scriptType == "" {
-				continue
-			}
-
-			if addrInfo, exists := trackedAddrs[string(addr)]; exists {
-				// Found a tracked address in the output
-				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
-
-				// Get sender address from inputs
-				var senderAddress string
-				if len(tx.VIn) > 0 && len(tx.VIn[0].TxID) > 0 {
-					// Get the first input's previous transaction
-					txIDHex := doge.HexEncodeReversed(tx.VIn[0].TxID)
-					prevTxData, err := blockchain.GetRawTransaction(txIDHex)
-					if err == nil {
-						prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
-						if err == nil {
-							prevTx := doge.DecodeTx(prevTxBytes)
-							if int(tx.VIn[0].VOut) < len(prevTx.VOut) {
-								prevOut := prevTx.VOut[tx.VIn[0].VOut]
-								_, senderAddr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
-								senderAddress = string(senderAddr)
-							}
-						}
-					}
-				}
-
-				// Create unspent output record
-				unspentOutput := &serverdb.UnspentOutput{
-					AddressID: addrInfo.id,
-					TxID:      tx.TxID,
-					Vout:      i,
-					Amount:    amount,
-					Script:    doge.HexEncode(vout.Script),
-				}
-
-				// Add unspent output to database
-				if err := serverdb.AddUnspentOutput(db, unspentOutput); err != nil {
-					log.Printf("Error adding unspent output: %v", err)
-				}
-
-				// Check if this transaction already exists
-				var existingTxID int64
-				err := db.QueryRow(`
-					SELECT id FROM transactions 
-					WHERE address_id = $1 AND tx_id = $2
-				`, addrInfo.id, tx.TxID).Scan(&existingTxID)
-
-				if err == sql.ErrNoRows {
-					// Calculate initial confirmations
-					confirmations := 1 // First confirmation
-
-					// Determine initial status
-					status := "pending"
-					if confirmations >= addrInfo.requiredConfirmations {
-						status = "confirmed"
-					}
-
-					// Transaction doesn't exist, create a new one
-					transaction := &serverdb.Transaction{
-						AddressID:       addrInfo.id,
-						TxID:            tx.TxID,
-						BlockHash:       block.Hash,
-						BlockHeight:     block.Height,
-						Amount:          amount,
-						Fee:             fee,
-						Timestamp:       timestamp,
-						IsIncoming:      true,
-						Confirmations:   confirmations,
-						Status:          status,
-						SenderAddress:   senderAddress,
-						ReceiverAddress: string(addr),
-					}
-
-					// Add transaction to database
-					if err := serverdb.AddTransaction(db, transaction); err != nil {
-						log.Printf("Error adding transaction: %v", err)
-					}
-				} else if err != nil {
-					log.Printf("Error checking for existing transaction: %v", err)
-				} else {
-					// Transaction exists, update it with the new block information
-					_, err = db.Exec(`
-						UPDATE transactions 
-						SET block_hash = $1, 
-							block_height = $2, 
-							fee = $3,
-							timestamp = $4,
-							confirmations = CASE 
-								WHEN block_height IS NOT NULL THEN 
-									CASE 
-										WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
-										ELSE CAST($2 - block_height + 1 AS INTEGER)
-									END
-								ELSE 1
-							END,
-							status = CASE 
-								WHEN block_height IS NOT NULL AND 
-									CASE 
-										WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
-										ELSE CAST($2 - block_height + 1 AS INTEGER)
-									END >= $5 THEN 'confirmed' 
-								ELSE 'pending' 
-							END,
-							sender_address = $6,
-							receiver_address = $7
-						WHERE id = $8
-					`, block.Hash, block.Height, fee, timestamp, addrInfo.requiredConfirmations, senderAddress, string(addr), existingTxID)
-					if err != nil {
-						log.Printf("Error updating transaction: %v", err)
-					}
-				}
-			}
+		// Check if transaction already exists
+		exists, err := serverdb.TransactionExists(db, tx.TxID)
+		if err != nil {
+			log.Printf("Error checking if transaction exists: %v", err)
+			continue
 		}
 
-		// Process inputs (outgoing transactions)
-		for _, vin := range tx.VIn {
-			// Skip coinbase transactions (they have empty TxID)
-			if len(vin.TxID) == 0 {
-				continue
-			}
-
-			// Get the previous transaction
-			txIDHex := doge.HexEncodeReversed(vin.TxID)
-			prevTxData, err := blockchain.GetRawTransaction(txIDHex)
+		if exists {
+			// Update existing transaction
+			_, err = db.Exec(`
+				UPDATE transactions 
+				SET block_hash = $1,
+					block_height = $2,
+					confirmations = CASE 
+						WHEN block_height IS NOT NULL THEN 
+							CASE 
+								WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50 
+								ELSE CAST($2 - block_height + 1 AS INTEGER) 
+							END 
+						ELSE 0 
+					END,
+					status = CASE 
+						WHEN block_height IS NOT NULL AND 
+							CASE 
+								WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50 
+								ELSE CAST($2 - block_height + 1 AS INTEGER) 
+							END >= required_confirmations 
+						THEN 'confirmed' 
+						ELSE 'pending' 
+					END,
+					fee = $3,
+					timestamp = $4
+				WHERE txid = $5`,
+				block.Hash, block.Height, fee, txTimestamp, tx.TxID)
 			if err != nil {
+				log.Printf("Error updating transaction: %v", err)
 				continue
 			}
+		} else {
+			// Extract address from the first output
+			var address string
+			if len(tx.VOut) > 0 {
+				scriptType, addr := doge.ClassifyScript(tx.VOut[0].Script, &doge.DogeMainNetChain)
+				if scriptType != "" {
+					address = string(addr)
+				}
+			}
 
-			// Decode previous transaction
-			prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+			// Insert new transaction
+			_, err = db.Exec(`
+				INSERT INTO transactions (
+					txid, address_id, amount, block_hash, block_height, 
+					confirmations, status, required_confirmations, fee, timestamp
+				) 
+				SELECT $1, id, $2, $3, $4, 
+					CASE WHEN $4 IS NOT NULL THEN 1 ELSE 0 END,
+					CASE WHEN $4 IS NOT NULL AND 1 >= required_confirmations THEN 'confirmed' ELSE 'pending' END,
+					required_confirmations, $5, $6
+				FROM addresses 
+				WHERE address = $7`,
+				tx.TxID, totalOutput, block.Hash, block.Height, fee, txTimestamp, address)
 			if err != nil {
+				log.Printf("Error adding transaction: %v", err)
 				continue
-			}
-			prevTx := doge.DecodeTx(prevTxBytes)
-
-			// Check if the spent output belonged to a tracked address
-			if vin.VOut < uint32(len(prevTx.VOut)) {
-				prevOut := prevTx.VOut[vin.VOut]
-				scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
-				if scriptType == "" {
-					continue
-				}
-
-				if addrInfo, exists := trackedAddrs[string(addr)]; exists {
-					// Found a tracked address in the input
-					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
-
-					// Get receiver address from outputs
-					var receiverAddress string
-					if len(tx.VOut) > 0 {
-						_, receiverAddr := doge.ClassifyScript(tx.VOut[0].Script, &doge.DogeMainNetChain)
-						receiverAddress = string(receiverAddr)
-					}
-
-					// Remove the unspent output as it's now spent
-					if err := serverdb.RemoveUnspentOutput(db, addrInfo.id, txIDHex, int(vin.VOut)); err != nil {
-						log.Printf("Error removing unspent output: %v", err)
-					}
-
-					// Check if this transaction already exists
-					var existingTxID int64
-					err := db.QueryRow(`
-						SELECT id FROM transactions 
-						WHERE address_id = $1 AND tx_id = $2
-					`, addrInfo.id, tx.TxID).Scan(&existingTxID)
-
-					if err == sql.ErrNoRows {
-						// Calculate initial confirmations
-						confirmations := 1 // First confirmation
-
-						// Determine initial status
-						status := "pending"
-						if confirmations >= addrInfo.requiredConfirmations {
-							status = "confirmed"
-						}
-
-						// Transaction doesn't exist, create a new one
-						transaction := &serverdb.Transaction{
-							AddressID:       addrInfo.id,
-							TxID:            tx.TxID,
-							BlockHash:       block.Hash,
-							BlockHeight:     block.Height,
-							Amount:          amount,
-							Fee:             fee,
-							Timestamp:       timestamp,
-							IsIncoming:      false,
-							Confirmations:   confirmations,
-							Status:          status,
-							SenderAddress:   string(addr),
-							ReceiverAddress: receiverAddress,
-						}
-
-						// Add transaction to database
-						if err := serverdb.AddTransaction(db, transaction); err != nil {
-							log.Printf("Error adding transaction: %v", err)
-						}
-					} else if err != nil {
-						log.Printf("Error checking for existing transaction: %v", err)
-					} else {
-						// Transaction exists, update it with the new block information
-						_, err = db.Exec(`
-							UPDATE transactions 
-							SET block_hash = $1, 
-								block_height = $2, 
-								fee = $3,
-								timestamp = $4,
-								confirmations = CASE 
-									WHEN block_height IS NOT NULL THEN 
-										CASE 
-											WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
-											ELSE CAST($2 - block_height + 1 AS INTEGER)
-										END
-									ELSE 1
-								END,
-								status = CASE 
-									WHEN block_height IS NOT NULL AND 
-										CASE 
-											WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
-											ELSE CAST($2 - block_height + 1 AS INTEGER)
-										END >= $5 THEN 'confirmed' 
-									ELSE 'pending' 
-								END,
-								sender_address = $6,
-								receiver_address = $7
-							WHERE id = $8
-						`, block.Hash, block.Height, fee, timestamp, addrInfo.requiredConfirmations, string(addr), receiverAddress, existingTxID)
-						if err != nil {
-							log.Printf("Error updating transaction: %v", err)
-						}
-					}
-				}
 			}
 		}
 	}

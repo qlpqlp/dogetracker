@@ -211,3 +211,14 @@ func GetOrCreateAddressWithDetails(db *sql.DB, address string, requiredConfirmat
 
 	return addr, transactions, unspentOutputs, nil
 }
+
+// TransactionExists checks if a transaction with the given txid exists in the database
+func TransactionExists(db *sql.DB, txid string) (bool, error) {
+	var exists bool
+	err := db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM transactions WHERE txid = $1
+		)
+	`, txid).Scan(&exists)
+	return exists, err
+}
