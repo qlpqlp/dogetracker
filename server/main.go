@@ -541,7 +541,7 @@ func main() {
 	// API flags
 	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 420), "API server port")
 	apiToken := flag.String("api-token", getEnvOrDefault("API_TOKEN", ""), "API bearer token for authentication")
-	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n"), "Starting block hash or height to begin processing from")
+	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691"), "Starting block hash or height to begin processing from")
 
 	// Parse command line flags
 	flag.Parse()
