@@ -572,14 +572,30 @@ func main() {
 			case b := <-blocks:
 				if b.Block != nil {
 					log.Printf("Processing block: %v (%v)", b.Block.Hash, b.Block.Height)
+
+					// Process block transactions and update database
+					if err := ProcessBlockTransactions(db, b.Block, blockchain); err != nil {
+						log.Printf("Failed to process block transactions: %v", err)
+					}
+
 					// Update last processed block in database
 					if err := serverdb.UpdateLastProcessedBlock(db, b.Block.Hash, b.Block.Height); err != nil {
 						log.Printf("Failed to update last processed block: %v", err)
 					}
 
-					// Process block transactions and update database
-					if err := ProcessBlockTransactions(db, b.Block, blockchain); err != nil {
-						log.Printf("Failed to process block transactions: %v", err)
+					// Get the next block hash from the block header
+					blockHeader, err := blockchain.GetBlockHeader(b.Block.Hash)
+					if err != nil {
+						log.Printf("Error getting block header: %v", err)
+						continue
+					}
+
+					if blockHeader.NextBlockHash != "" {
+						log.Printf("Moving to next block: %s", blockHeader.NextBlockHash)
+						// Update the start block hash for the next iteration
+						startBlockHash = blockHeader.NextBlockHash
+					} else {
+						log.Printf("Reached the end of the blockchain")
 					}
 				} else {
 					log.Printf("Undoing to: %v (%v)", b.Undo.ResumeFromBlock, b.Undo.LastValidHeight)
