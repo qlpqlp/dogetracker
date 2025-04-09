@@ -160,6 +160,25 @@ func (t *MempoolTracker) checkMempool() error {
 				// Found a tracked address in the output
 				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
 
+				// Get sender address from inputs
+				var senderAddress string
+				if len(tx.VIn) > 0 && len(tx.VIn[0].TxID) > 0 {
+					// Get the first input's previous transaction
+					txIDHex := doge.HexEncodeReversed(tx.VIn[0].TxID)
+					prevTxData, err := t.client.GetRawTransaction(txIDHex)
+					if err == nil {
+						prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+						if err == nil {
+							prevTx := doge.DecodeTx(prevTxBytes)
+							if int(tx.VIn[0].VOut) < len(prevTx.VOut) {
+								prevOut := prevTx.VOut[tx.VIn[0].VOut]
+								_, senderAddr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+								senderAddress = string(senderAddr)
+							}
+						}
+					}
+				}
+
 				// Check if this transaction already exists
 				var existingTxID int64
 				err := t.db.QueryRow(`
@@ -170,12 +189,14 @@ func (t *MempoolTracker) checkMempool() error {
 				if err == sql.ErrNoRows {
 					// Transaction doesn't exist, create a new one
 					transaction := &db.Transaction{
-						AddressID:     addrInfo.id,
-						TxID:          txid,
-						Amount:        amount,
-						IsIncoming:    true,
-						Status:        "pending",
-						Confirmations: 0,
+						AddressID:       addrInfo.id,
+						TxID:            txid,
+						Amount:          amount,
+						IsIncoming:      true,
+						Status:          "pending",
+						Confirmations:   0,
+						SenderAddress:   senderAddress,
+						ReceiverAddress: addrStr,
 					}
 
 					// Add transaction to database
@@ -221,6 +242,13 @@ func (t *MempoolTracker) checkMempool() error {
 					// Found a tracked address in the input
 					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
 
+					// Get receiver address from outputs
+					var receiverAddress string
+					if len(tx.VOut) > 0 {
+						_, receiverAddr := doge.ClassifyScript(tx.VOut[0].Script, &doge.DogeMainNetChain)
+						receiverAddress = string(receiverAddr)
+					}
+
 					// Check if this transaction already exists
 					var existingTxID int64
 					err := t.db.QueryRow(`
@@ -231,12 +259,14 @@ func (t *MempoolTracker) checkMempool() error {
 					if err == sql.ErrNoRows {
 						// Transaction doesn't exist, create a new one
 						transaction := &db.Transaction{
-							AddressID:     addrInfo.id,
-							TxID:          txid,
-							Amount:        amount,
-							IsIncoming:    false,
-							Status:        "pending",
-							Confirmations: 0,
+							AddressID:       addrInfo.id,
+							TxID:            txid,
+							Amount:          amount,
+							IsIncoming:      false,
+							Status:          "pending",
+							Confirmations:   0,
+							SenderAddress:   addrStr,
+							ReceiverAddress: receiverAddress,
 						}
 
 						// Add transaction to database

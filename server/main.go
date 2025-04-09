@@ -125,6 +125,47 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 	// Process each transaction in the block
 	for _, tx := range block.Block.Tx {
+		// Calculate transaction fee
+		var fee float64
+		if len(tx.VIn) > 0 {
+			// Sum all inputs
+			var totalInputs float64
+			for _, vin := range tx.VIn {
+				if len(vin.TxID) == 0 {
+					continue // Skip coinbase transactions
+				}
+				prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
+				if err != nil {
+					continue
+				}
+				prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+				if err != nil {
+					continue
+				}
+				prevTx := doge.DecodeTx(prevTxBytes)
+				if int(vin.VOut) < len(prevTx.VOut) {
+					totalInputs += float64(prevTx.VOut[vin.VOut].Value) / 1e8
+				}
+			}
+
+			// Sum all outputs
+			var totalOutputs float64
+			for _, vout := range tx.VOut {
+				totalOutputs += float64(vout.Value) / 1e8
+			}
+
+			// Fee is the difference between inputs and outputs
+			fee = totalInputs - totalOutputs
+		}
+
+		// Get transaction timestamp from block header
+		blockHeader, err := blockchain.GetBlockHeader(block.Hash)
+		if err != nil {
+			log.Printf("Error getting block header: %v", err)
+			continue
+		}
+		timestamp := int64(blockHeader.Time)
+
 		// Process outputs (incoming transactions)
 		for i, vout := range tx.VOut {
 			// Extract addresses from output script
@@ -136,6 +177,25 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 			if addrInfo, exists := trackedAddrs[string(addr)]; exists {
 				// Found a tracked address in the output
 				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
+
+				// Get sender address from inputs
+				var senderAddress string
+				if len(tx.VIn) > 0 && len(tx.VIn[0].TxID) > 0 {
+					// Get the first input's previous transaction
+					txIDHex := doge.HexEncodeReversed(tx.VIn[0].TxID)
+					prevTxData, err := blockchain.GetRawTransaction(txIDHex)
+					if err == nil {
+						prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+						if err == nil {
+							prevTx := doge.DecodeTx(prevTxBytes)
+							if int(tx.VIn[0].VOut) < len(prevTx.VOut) {
+								prevOut := prevTx.VOut[tx.VIn[0].VOut]
+								_, senderAddr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+								senderAddress = string(senderAddr)
+							}
+						}
+					}
+				}
 
 				// Create unspent output record
 				unspentOutput := &serverdb.UnspentOutput{
@@ -170,14 +230,18 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 					// Transaction doesn't exist, create a new one
 					transaction := &serverdb.Transaction{
-						AddressID:     addrInfo.id,
-						TxID:          tx.TxID,
-						BlockHash:     block.Hash,
-						BlockHeight:   block.Height,
-						Amount:        amount,
-						IsIncoming:    true,
-						Confirmations: confirmations,
-						Status:        status,
+						AddressID:       addrInfo.id,
+						TxID:            tx.TxID,
+						BlockHash:       block.Hash,
+						BlockHeight:     block.Height,
+						Amount:          amount,
+						Fee:             fee,
+						Timestamp:       timestamp,
+						IsIncoming:      true,
+						Confirmations:   confirmations,
+						Status:          status,
+						SenderAddress:   senderAddress,
+						ReceiverAddress: string(addr),
 					}
 
 					// Add transaction to database
@@ -192,6 +256,8 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 						UPDATE transactions 
 						SET block_hash = $1, 
 							block_height = $2, 
+							fee = $3,
+							timestamp = $4,
 							confirmations = CASE 
 								WHEN block_height IS NOT NULL THEN 
 									CASE 
@@ -205,11 +271,13 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 									CASE 
 										WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
 										ELSE CAST($2 - block_height + 1 AS INTEGER)
-									END >= $3 THEN 'confirmed' 
+									END >= $5 THEN 'confirmed' 
 								ELSE 'pending' 
-							END
-						WHERE id = $4
-					`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID)
+							END,
+							sender_address = $6,
+							receiver_address = $7
+						WHERE id = $8
+					`, block.Hash, block.Height, fee, timestamp, addrInfo.requiredConfirmations, senderAddress, string(addr), existingTxID)
 					if err != nil {
 						log.Printf("Error updating transaction: %v", err)
 					}
@@ -250,6 +318,13 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					// Found a tracked address in the input
 					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
 
+					// Get receiver address from outputs
+					var receiverAddress string
+					if len(tx.VOut) > 0 {
+						_, receiverAddr := doge.ClassifyScript(tx.VOut[0].Script, &doge.DogeMainNetChain)
+						receiverAddress = string(receiverAddr)
+					}
+
 					// Remove the unspent output as it's now spent
 					if err := serverdb.RemoveUnspentOutput(db, addrInfo.id, txIDHex, int(vin.VOut)); err != nil {
 						log.Printf("Error removing unspent output: %v", err)
@@ -274,14 +349,18 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 						// Transaction doesn't exist, create a new one
 						transaction := &serverdb.Transaction{
-							AddressID:     addrInfo.id,
-							TxID:          tx.TxID,
-							BlockHash:     block.Hash,
-							BlockHeight:   block.Height,
-							Amount:        amount,
-							IsIncoming:    false,
-							Confirmations: confirmations,
-							Status:        status,
+							AddressID:       addrInfo.id,
+							TxID:            tx.TxID,
+							BlockHash:       block.Hash,
+							BlockHeight:     block.Height,
+							Amount:          amount,
+							Fee:             fee,
+							Timestamp:       timestamp,
+							IsIncoming:      false,
+							Confirmations:   confirmations,
+							Status:          status,
+							SenderAddress:   string(addr),
+							ReceiverAddress: receiverAddress,
 						}
 
 						// Add transaction to database
@@ -296,6 +375,8 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 							UPDATE transactions 
 							SET block_hash = $1, 
 								block_height = $2, 
+								fee = $3,
+								timestamp = $4,
 								confirmations = CASE 
 									WHEN block_height IS NOT NULL THEN 
 										CASE 
@@ -309,11 +390,13 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 										CASE 
 											WHEN CAST($2 - block_height + 1 AS INTEGER) > 50 THEN 50
 											ELSE CAST($2 - block_height + 1 AS INTEGER)
-										END >= $3 THEN 'confirmed' 
+										END >= $5 THEN 'confirmed' 
 									ELSE 'pending' 
-								END
-							WHERE id = $4
-						`, block.Hash, block.Height, addrInfo.requiredConfirmations, existingTxID)
+								END,
+								sender_address = $6,
+								receiver_address = $7
+							WHERE id = $8
+						`, block.Hash, block.Height, fee, timestamp, addrInfo.requiredConfirmations, string(addr), receiverAddress, existingTxID)
 						if err != nil {
 							log.Printf("Error updating transaction: %v", err)
 						}
@@ -494,24 +577,36 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	// Get last processed block from database
-	lastBlockHash, _, err := serverdb.GetLastProcessedBlock(db)
-	if err != nil {
-		log.Printf("Failed to get last processed block: %v", err)
-		// Use default block if database query fails
-		lastBlockHash = *startBlock
-	}
-
 	log.Printf("Connecting to Dogecoin node at %s:%d", config.rpcHost, config.rpcPort)
-
-	ctx, shutdown := context.WithCancel(context.Background())
 
 	// Core Node blockchain access.
 	blockchain := core.NewCoreRPCClient(config.rpcHost, config.rpcPort, config.rpcUser, config.rpcPass)
 
+	// Get last processed block from database
+	lastBlockHash, lastBlockHeight, err := serverdb.GetLastProcessedBlock(db)
+	if err != nil {
+		log.Printf("Failed to get last processed block: %v", err)
+		// If no database block exists, get the current best block
+		lastBlockHash, err = blockchain.GetBestBlockHash()
+		if err != nil {
+			log.Printf("Failed to get best block hash: %v", err)
+			lastBlockHash = *startBlock // Fall back to default block
+		} else {
+			log.Printf("No database block found, starting from current best block: %s", lastBlockHash)
+		}
+	} else {
+		log.Printf("Found last processed block in database: %s (height: %d)", lastBlockHash, lastBlockHeight)
+	}
+
+	ctx, shutdown := context.WithCancel(context.Background())
+
 	// Check if startBlock is a block height (numeric) or block hash
 	var startBlockHash string
-	if blockHeight, err := strconv.ParseInt(*startBlock, 10, 64); err == nil {
+	if *startBlock == "" {
+		// No start block provided, use the last processed block from database or current best block
+		startBlockHash = lastBlockHash
+		log.Printf("No start block specified, using %s", startBlockHash)
+	} else if blockHeight, err := strconv.ParseInt(*startBlock, 10, 64); err == nil {
 		// It's a block height, get the corresponding block hash
 		startBlockHash, err = blockchain.GetBlockHash(blockHeight)
 		if err != nil {

@@ -17,16 +17,20 @@ type TrackedAddress struct {
 
 // Transaction represents a Dogecoin transaction involving a tracked address
 type Transaction struct {
-	ID            int64     `json:"id"`
-	AddressID     int64     `json:"address_id"`
-	TxID          string    `json:"tx_id"`
-	BlockHash     string    `json:"block_hash"`
-	BlockHeight   int64     `json:"block_height"`
-	Amount        float64   `json:"amount"`
-	IsIncoming    bool      `json:"is_incoming"`
-	Confirmations int       `json:"confirmations"`
-	Status        string    `json:"status"` // "pending" or "confirmed"
-	CreatedAt     time.Time `json:"created_at"`
+	ID              int64     `json:"id"`
+	AddressID       int64     `json:"address_id"`
+	TxID            string    `json:"tx_id"`
+	BlockHash       string    `json:"block_hash"`
+	BlockHeight     int64     `json:"block_height"`
+	Amount          float64   `json:"amount"`
+	Fee             float64   `json:"fee"`       // Transaction fee in DOGE
+	Timestamp       int64     `json:"timestamp"` // Transaction timestamp from blockchain
+	IsIncoming      bool      `json:"is_incoming"`
+	Confirmations   int       `json:"confirmations"`
+	Status          string    `json:"status"`           // "pending" or "confirmed"
+	SenderAddress   string    `json:"sender_address"`   // Address that sent the transaction
+	ReceiverAddress string    `json:"receiver_address"` // Address that received the transaction
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // UnspentOutput represents an unspent transaction output for a tracked address
@@ -66,9 +70,13 @@ func InitDB(db *sql.DB) error {
 			block_hash VARCHAR(64),
 			block_height BIGINT,
 			amount DECIMAL(20,8) NOT NULL,
+			fee DECIMAL(20,8) NOT NULL DEFAULT 0,
+			timestamp BIGINT NOT NULL,
 			is_incoming BOOLEAN NOT NULL,
 			confirmations INTEGER NOT NULL DEFAULT 0,
 			status VARCHAR(10) NOT NULL DEFAULT 'pending',
+			sender_address VARCHAR(34),
+			receiver_address VARCHAR(34),
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(address_id, tx_id)
 		)
