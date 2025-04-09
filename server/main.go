@@ -239,17 +239,21 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 
 			// Insert new transaction
 			_, err = db.Exec(`
+				WITH addr AS (
+					SELECT id, required_confirmations 
+					FROM tracked_addresses 
+					WHERE address = $7
+				)
 				INSERT INTO transactions (
 					tx_id, address_id, amount, block_hash, block_height, 
 					confirmations, status, fee, timestamp, is_incoming,
 					sender_address, receiver_address
 				) 
-				SELECT $1, id, $2, $3, $4, 
+				SELECT $1, id, $2, $3, CAST($4 AS BIGINT), 
 					CASE WHEN $4 IS NOT NULL THEN 1 ELSE 0 END,
 					CASE WHEN $4 IS NOT NULL AND 1 >= required_confirmations THEN 'confirmed' ELSE 'pending' END,
 					$5, $6, $8, $9, $10
-				FROM tracked_addresses 
-				WHERE address = $7`,
+				FROM addr`,
 				tx.TxID, totalOutput, block.Hash, block.Height, fee, txTimestamp, address, true, senderAddress, address)
 			if err != nil {
 				log.Printf("Error adding transaction: %v", err)

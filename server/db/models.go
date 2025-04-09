@@ -127,12 +127,5 @@ func InitDB(db *sql.DB) error {
 		return err
 	}
 
-	// Insert default row if not exists
-	_, err = db.Exec(`
-		INSERT INTO last_processed_block (id, block_hash, block_height)
-		VALUES (1, '0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f', 0)
-		ON CONFLICT (id) DO NOTHING
-	`)
-
-	return err
+	return nil
 }
