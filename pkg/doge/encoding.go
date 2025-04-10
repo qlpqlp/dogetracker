@@ -25,7 +25,8 @@ func DecodeBlock(data []byte) (*Block, error) {
 	offset += 4
 
 	// Log block version and type
-	log.Printf("Block version: %x (is AuxPow: %v)", block.Header.Version, block.Header.Version >= 0x20000000)
+	isAuxPow := block.Header.Version >= 0x20000000
+	log.Printf("Block version: %x (is AuxPow: %v)", block.Header.Version, isAuxPow)
 
 	block.Header.PrevBlock = make([]byte, 32)
 	copy(block.Header.PrevBlock, data[offset:offset+32])
@@ -45,7 +46,6 @@ func DecodeBlock(data []byte) (*Block, error) {
 	offset += 4
 
 	// Check if this is an AuxPow block
-	isAuxPow := block.Header.Version >= 0x20000000
 	if isAuxPow {
 		log.Printf("Processing AuxPow block, skipping AuxPow data")
 		// For AuxPow blocks, we need to handle the special structure
