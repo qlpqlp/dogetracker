@@ -308,24 +308,31 @@ func ChainFromName(chainName string) (*doge.ChainParams, error) {
 }
 
 func (c *DogeTracker) processBlock(block *ChainBlock) {
-	log.Printf("Starting to process block %d with %d transactions", block.Height, len(block.Block.Transactions))
-	for i, tx := range block.Block.Transactions {
-		log.Printf("Processing %d/%d: %s", i+1, len(block.Block.Transactions), tx.Hash)
+	log.Printf("Starting to process block %d with %d transactions", block.Height, len(block.Block.Tx))
+	for i, tx := range block.Block.Tx {
+		log.Printf("Processing %d/%d: %s", i+1, len(block.Block.Tx), tx.TxID)
 
-		// Add detailed logging for transaction data
-		log.Printf("Transaction data length: %d bytes", len(tx.Data))
-		if len(tx.Data) > 0 {
-			log.Printf("First few bytes of transaction: %x", tx.Data[:min(32, len(tx.Data))])
-		}
-
-		// Add error handling around transaction decoding
-		decodedTx, err := doge.DecodeTransaction(tx.Data)
-		if err != nil {
-			log.Printf("Error decoding transaction %s: %v", tx.Hash, err)
+		// Check if this is a coinbase transaction
+		isCoinbase := len(tx.VIn) > 0 && len(tx.VIn[0].TxID) == 0
+		if isCoinbase {
+			log.Printf("Transaction %s is a coinbase transaction", tx.TxID)
 			continue
 		}
 
-		// Process the decoded transaction
-		c.processTransaction(block, decodedTx)
+		// Process inputs
+		for _, vin := range tx.VIn {
+			// Skip coinbase transactions
+			if len(vin.TxID) == 0 {
+				continue
+			}
+			// Process input
+			log.Printf("Processing input from transaction %x", vin.TxID)
+		}
+
+		// Process outputs
+		for i, vout := range tx.VOut {
+			// Process output
+			log.Printf("Processing output %d with value %d", i, vout.Value)
+		}
 	}
 }
