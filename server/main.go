@@ -141,9 +141,8 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, vin.TxID, len(prevTx.VOut))
 					continue
 				}
-				prevOut := prevTx.VOut[vin.VOut]
 				// Extract address from script
-				scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+				scriptType, addr := doge.ClassifyScript(prevTx.VOut[vin.VOut].Script, &doge.DogeMainNetChain)
 				if scriptType == "" {
 					continue
 				}
@@ -183,11 +182,8 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 						log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, vin.TxID, len(prevTx.VOut))
 						continue
 					}
-					prevOut := prevTx.VOut[vin.VOut]
-					if int(vin.VOut) < len(prevTx.VOut) {
-						totalInput += float64(prevOut.Value) / 1e8
-						inputCount++
-					}
+					totalInput += float64(prevTx.VOut[vin.VOut].Value) / 1e8
+					inputCount++
 				}
 
 				// Sum all outputs
@@ -355,13 +351,10 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, txIDHex, len(prevTx.VOut))
 					continue
 				}
-				prevOut := prevTx.VOut[vin.VOut]
-
 				// Check if the spent output belonged to a tracked address
 				if vin.VOut < uint32(len(prevTx.VOut)) {
-					prevOut := prevTx.VOut[vin.VOut]
 					// Extract address from script
-					scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+					scriptType, addr := doge.ClassifyScript(prevTx.VOut[vin.VOut].Script, &doge.DogeMainNetChain)
 					if scriptType == "" {
 						continue
 					}
@@ -369,7 +362,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					if addrInfo, exists := trackedAddrs[string(addr)]; exists {
 						log.Printf("Found tracked address in input: %s", string(addr))
 						// Found a tracked address in the input
-						amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
+						amount := -float64(prevTx.VOut[vin.VOut].Value) / 1e8 // Negative for outgoing, convert from satoshis
 
 						// Get receiver address from outputs
 						var receiverAddress string
