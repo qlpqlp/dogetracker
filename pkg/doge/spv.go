@@ -4,12 +4,14 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"time"
 )
 
 // NewSPVNode creates a new SPV node
 func NewSPVNode(peers []string) *SPVNode {
+	log.Printf("Initializing SPV node with %d peers", len(peers))
 	return &SPVNode{
 		headers:        make(map[uint32]BlockHeader),
 		peers:          peers,
@@ -20,29 +22,36 @@ func NewSPVNode(peers []string) *SPVNode {
 
 // ConnectToPeer connects to a peer
 func (n *SPVNode) ConnectToPeer(peer string) error {
+	log.Printf("Attempting to establish TCP connection to %s", peer)
 	conn, err := net.DialTimeout("tcp", peer, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to connect to peer %s: %v", peer, err)
 	}
 	n.conn = conn
+	log.Printf("TCP connection established to %s", peer)
 
 	// Send version message
+	log.Printf("Sending version message to %s", peer)
 	if err := n.sendVersionMessage(); err != nil {
 		n.conn.Close()
 		return fmt.Errorf("failed to send version message: %v", err)
 	}
+	log.Printf("Version message sent successfully to %s", peer)
 
 	// Send filter load message
+	log.Printf("Sending filter load message to %s", peer)
 	if err := n.sendFilterLoadMessage(); err != nil {
 		n.conn.Close()
 		return fmt.Errorf("failed to send filter load message: %v", err)
 	}
+	log.Printf("Filter load message sent successfully to %s", peer)
 
 	return nil
 }
 
 // AddWatchAddress adds an address to watch
 func (n *SPVNode) AddWatchAddress(address string) {
+	log.Printf("Adding address to watch list: %s", address)
 	n.watchAddresses[address] = true
 	n.updateBloomFilter()
 }
@@ -60,6 +69,7 @@ func (n *SPVNode) GetBlockCount() (int64, error) {
 			maxHeight = height
 		}
 	}
+	log.Printf("Current block height: %d", maxHeight)
 	return int64(maxHeight), nil
 }
 
@@ -69,6 +79,7 @@ func (n *SPVNode) GetBlockTransactions(blockHash string) ([]Transaction, error) 
 		return nil, fmt.Errorf("not connected to peer")
 	}
 
+	log.Printf("Requesting transactions for block %s", blockHash)
 	// In a real implementation, this would:
 	// 1. Send getdata message for the block
 	// 2. Receive block message
@@ -82,11 +93,13 @@ func (n *SPVNode) GetBlockTransactions(blockHash string) ([]Transaction, error) 
 
 // ProcessTransaction checks if a transaction is relevant to our watched addresses
 func (n *SPVNode) ProcessTransaction(tx *Transaction) bool {
+	log.Printf("Processing transaction %s", tx.TxID)
 	for _, output := range tx.Outputs {
 		// Extract addresses from output script
 		addresses := extractAddressesFromScript(output.ScriptPubKey)
 		for _, addr := range addresses {
 			if n.watchAddresses[addr] {
+				log.Printf("Found relevant transaction for watched address %s", addr)
 				return true
 			}
 		}
@@ -97,6 +110,7 @@ func (n *SPVNode) ProcessTransaction(tx *Transaction) bool {
 // Internal functions
 
 func (n *SPVNode) updateBloomFilter() {
+	log.Printf("Updating bloom filter with %d watched addresses", len(n.watchAddresses))
 	// In a real implementation, this would:
 	// 1. Create a new bloom filter with appropriate size and false positive rate
 	// 2. Add all watched addresses to the filter
@@ -105,12 +119,14 @@ func (n *SPVNode) updateBloomFilter() {
 }
 
 func (n *SPVNode) sendVersionMessage() error {
+	log.Printf("Creating version message")
 	// In a real implementation, this would send a proper version message
 	// For now, just a placeholder
 	return nil
 }
 
 func (n *SPVNode) sendFilterLoadMessage() error {
+	log.Printf("Creating filter load message")
 	// In a real implementation, this would send the bloom filter
 	// For now, just a placeholder
 	return nil
@@ -119,6 +135,7 @@ func (n *SPVNode) sendFilterLoadMessage() error {
 // Helper functions
 
 func extractAddressesFromScript(script []byte) []string {
+	log.Printf("Extracting addresses from script of length %d", len(script))
 	// In a real implementation, this would:
 	// 1. Parse the script
 	// 2. Extract P2PKH, P2SH, and other address types
@@ -129,52 +146,63 @@ func extractAddressesFromScript(script []byte) []string {
 // Message handling functions (to be implemented)
 
 func (n *SPVNode) handleVersionMessage(payload []byte) error {
+	log.Printf("Handling version message of length %d", len(payload))
 	return nil
 }
 
 func (n *SPVNode) handleHeadersMessage(payload []byte) error {
+	log.Printf("Handling headers message of length %d", len(payload))
 	return nil
 }
 
 func (n *SPVNode) handleBlockMessage(payload []byte) error {
+	log.Printf("Handling block message of length %d", len(payload))
 	return nil
 }
 
 func (n *SPVNode) handleTxMessage(payload []byte) error {
+	log.Printf("Handling transaction message of length %d", len(payload))
 	return nil
 }
 
 func (n *SPVNode) handleInvMessage(payload []byte) error {
+	log.Printf("Handling inventory message of length %d", len(payload))
 	return nil
 }
 
 // Network protocol functions (to be implemented)
 
 func (n *SPVNode) sendGetHeaders() error {
+	log.Printf("Sending getheaders message")
 	return nil
 }
 
 func (n *SPVNode) sendGetData(invType uint32, hash [32]byte) error {
+	log.Printf("Sending getdata message for type %d, hash %x", invType, hash)
 	return nil
 }
 
 func (n *SPVNode) sendMemPool() error {
+	log.Printf("Sending mempool message")
 	return nil
 }
 
 // Merkle block verification (to be implemented)
 
 func (n *SPVNode) verifyMerkleProof(header BlockHeader, txid [32]byte, proof []byte) bool {
+	log.Printf("Verifying merkle proof for transaction %x", txid)
 	return false
 }
 
 // Chain validation functions (to be implemented)
 
 func (n *SPVNode) validateHeader(header BlockHeader) error {
+	log.Printf("Validating block header at height %d", header.Height)
 	return nil
 }
 
 func (n *SPVNode) validateChain() error {
+	log.Printf("Validating chain with %d headers", len(n.headers))
 	return nil
 }
 

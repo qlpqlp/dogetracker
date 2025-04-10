@@ -29,31 +29,17 @@ import (
 )
 
 var (
-	rpcHost    string
-	rpcPort    int
-	rpcUser    string
-	rpcPass    string
-	zmqHost    string
-	zmqPort    int
-	batchSize  int
-	dbHost     string
-	dbPort     int
-	dbUser     string
-	dbPass     string
-	dbName     string
-	apiPort    int
-	apiToken   string
-	startBlock int64
+	dbHost   string
+	dbPort   int
+	dbUser   string
+	dbPass   string
+	dbName   string
+	apiPort  int
+	apiToken string
+	nodeAddr string
 )
 
 func init() {
-	flag.StringVar(&rpcHost, "rpc-host", "localhost", "RPC host")
-	flag.IntVar(&rpcPort, "rpc-port", 22555, "RPC port")
-	flag.StringVar(&rpcUser, "rpc-user", "", "RPC username")
-	flag.StringVar(&rpcPass, "rpc-pass", "", "RPC password")
-	flag.StringVar(&zmqHost, "zmq-host", "localhost", "Dogecoin ZMQ host")
-	flag.IntVar(&zmqPort, "zmq-port", 28332, "Dogecoin ZMQ port")
-	flag.IntVar(&batchSize, "batch-size", 100, "Batch size for processing transactions")
 	flag.StringVar(&dbHost, "db-host", "localhost", "Database host")
 	flag.IntVar(&dbPort, "db-port", 5432, "Database port")
 	flag.StringVar(&dbUser, "db-user", "postgres", "Database username")
@@ -61,7 +47,7 @@ func init() {
 	flag.StringVar(&dbName, "db-name", "dogetracker", "Database name")
 	flag.IntVar(&apiPort, "api-port", 8080, "API port")
 	flag.StringVar(&apiToken, "api-token", "", "API token")
-	flag.Int64Var(&startBlock, "start-block", 0, "Start block height")
+	flag.StringVar(&nodeAddr, "node", "qlplock.ddns.net:22556", "Dogecoin node address to connect to")
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
@@ -240,16 +226,29 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create SPV node with qlplock.ddns.net as peer
-	peers := []string{
-		"qlplock.ddns.net:22556", // Custom node
-	}
+	// Create SPV node with specified peer
+	peers := []string{nodeAddr}
 	spvNode := doge.NewSPVNode(peers)
 
-	// Connect to peer
-	if err := spvNode.ConnectToPeer(peers[0]); err != nil {
-		log.Fatalf("Failed to connect to peer: %v", err)
+	log.Printf("Attempting to connect to Dogecoin node at %s...", nodeAddr)
+
+	// Connect to peer with retry mechanism
+	var err error
+	for i := 0; i < 3; i++ {
+		if err = spvNode.ConnectToPeer(peers[0]); err == nil {
+			break
+		}
+		log.Printf("Connection attempt %d failed: %v", i+1, err)
+		if i < 2 { // Don't sleep on the last attempt
+			time.Sleep(5 * time.Second)
+		}
 	}
+
+	if err != nil {
+		log.Fatalf("Failed to connect to peer after 3 attempts: %v", err)
+	}
+
+	log.Printf("Successfully connected to Dogecoin node at %s", nodeAddr)
 
 	// Create database connection
 	db, err := tracker.NewDB(dbHost, dbPort, dbUser, dbPass, dbName)
@@ -282,6 +281,7 @@ func main() {
 					time.Sleep(10 * time.Second)
 					continue
 				}
+				log.Printf("Current block height: %d", height)
 
 				// Process new blocks
 				if err := t.ProcessBlocks(ctx, height); err != nil {
@@ -295,6 +295,7 @@ func main() {
 
 	// Start API server
 	go func() {
+		log.Printf("Starting API server on port %d", apiPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Error starting API server: %v", err)
 		}
@@ -304,6 +305,8 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
+
+	log.Println("Shutting down server...")
 
 	// Shutdown server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -316,4 +319,6 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Error shutting down server: %v", err)
 	}
+
+	log.Println("Server shutdown complete")
 }
