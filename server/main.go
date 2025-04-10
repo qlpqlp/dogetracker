@@ -242,6 +242,12 @@ func main() {
 	log.Printf("Attempting to connect to Dogecoin node at %s...", nodeAddr)
 	log.Printf("Starting from block height %d", startBlock)
 
+	// Connect to peer
+	if err := spvNode.ConnectToPeer(nodeAddr); err != nil {
+		log.Fatalf("Failed to connect to peer: %v", err)
+	}
+	log.Printf("Successfully connected to peer")
+
 	// Create tracker
 	t := tracker.NewTracker(db, spvNode)
 
