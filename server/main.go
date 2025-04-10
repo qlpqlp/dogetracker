@@ -241,7 +241,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 									continue
 								}
 								// Check if VOut index is valid
-								if int(tx.VIn[0].VOut) >= len(prevTx.VOut) {
+								if tx.VIn[0].VOut >= uint32(len(prevTx.VOut)) {
 									log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", tx.VIn[0].VOut, doge.HexEncodeReversed(tx.VIn[0].TxID), len(prevTx.VOut))
 									continue
 								}
