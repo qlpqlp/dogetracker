@@ -62,6 +62,29 @@ type DogeTracker struct {
 	fullUndoBlocks bool            // fully decode blocks in UndoForkBlocks
 }
 
+// Transaction represents a Dogecoin transaction
+type Transaction struct {
+	Version  uint32
+	VIn      []TxIn
+	VOut     []TxOut
+	LockTime uint32
+	TxID     string
+}
+
+// TxIn represents a transaction input
+type TxIn struct {
+	TxID     []byte
+	VOut     uint32
+	Script   []byte
+	Sequence uint32
+}
+
+// TxOut represents a transaction output
+type TxOut struct {
+	Value  int64
+	Script []byte
+}
+
 /*
  * WalkTheDoge walks the blockchain, keeping up with the Tip (Best Block)
  *
@@ -191,7 +214,39 @@ func (c *DogeTracker) followTheChain(nextBlockHash string) (lastProcessed string
 							Bits:       uint32(bits),
 							Nonce:      head.Nonce,
 						},
+						Tx: []doge.Transaction{}, // Initialize empty transaction slice
 					},
+				}
+
+				// For AuxPow blocks, we need to properly handle the AuxPow structure
+				if len(blockData) > 80 {
+					// Skip the 80-byte header
+					data := blockData[80:]
+
+					// First, decode the coinbase transaction length
+					txLen, bytesRead := DecodeVarInt(data)
+					if bytesRead == 0 {
+						log.Printf("Error decoding transaction length in AuxPow block")
+						continue
+					}
+
+					// Skip the AuxPow data and get to the actual transaction
+					// The AuxPow data structure is:
+					// 1. Coinbase transaction
+					// 2. AuxPow block header (80 bytes)
+					// 3. AuxPow Merkle branch
+					// 4. AuxPow parent block header (80 bytes)
+					// We need to skip all of this to get to the actual transaction
+					auxPowDataLength := int(txLen) + 80 + 80 // Coinbase tx + AuxPow header + parent header
+					if len(data) < bytesRead+auxPowDataLength {
+						log.Printf("Error: AuxPow data length exceeds available data")
+						continue
+					}
+
+					// Skip the AuxPow data to get to the actual transaction
+					txBytes := data[bytesRead+auxPowDataLength:]
+					tx := doge.DecodeTx(txBytes)
+					block.Block.Tx = append(block.Block.Tx, tx)
 				}
 				c.output <- BlockOrUndo{Block: block}
 				lastProcessed = block.Hash
@@ -368,5 +423,39 @@ func (c *DogeTracker) processBlock(block *ChainBlock) {
 			// Process output
 			log.Printf("Processing output %d with value %d", i, vout.Value)
 		}
+	}
+}
+
+// DecodeVarInt decodes a variable-length integer from the input bytes
+// Returns the decoded value and the number of bytes read
+func DecodeVarInt(data []byte) (uint64, int) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+
+	// Read the first byte to determine the format
+	firstByte := data[0]
+	if firstByte < 0xfd {
+		// Single byte
+		return uint64(firstByte), 1
+	} else if firstByte == 0xfd {
+		// 2 bytes
+		if len(data) < 3 {
+			return 0, 0
+		}
+		return uint64(data[1]) | uint64(data[2])<<8, 3
+	} else if firstByte == 0xfe {
+		// 4 bytes
+		if len(data) < 5 {
+			return 0, 0
+		}
+		return uint64(data[1]) | uint64(data[2])<<8 | uint64(data[3])<<16 | uint64(data[4])<<24, 5
+	} else {
+		// 8 bytes
+		if len(data) < 9 {
+			return 0, 0
+		}
+		return uint64(data[1]) | uint64(data[2])<<8 | uint64(data[3])<<16 | uint64(data[4])<<24 |
+			uint64(data[5])<<32 | uint64(data[6])<<40 | uint64(data[7])<<48 | uint64(data[8])<<56, 9
 	}
 }
