@@ -137,23 +137,24 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					continue
 				}
 				prevTx := doge.DecodeTx(prevTxBytes)
-				if int(vin.VOut) < len(prevTx.VOut) {
-					prevOut := prevTx.VOut[vin.VOut]
-					// Extract address from script
-					scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
-					if scriptType == "" {
-						continue
-					}
-					if _, exists := trackedAddrs[string(addr)]; exists {
-						hasTrackedAddress = true
-						log.Printf("Found tracked address in input: %s", string(addr))
-						break
-					}
+				if int(vin.VOut) >= len(prevTx.VOut) {
+					log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, vin.TxID, len(prevTx.VOut))
+					continue
+				}
+				prevOut := prevTx.VOut[vin.VOut]
+				// Extract address from script
+				scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+				if scriptType == "" {
+					continue
+				}
+				if _, exists := trackedAddrs[string(addr)]; exists {
+					hasTrackedAddress = true
+					log.Printf("Found tracked address in input: %s", string(addr))
+					break
 				}
 			}
 		}
 
-		// Only process transaction if it involves a tracked address
 		if hasTrackedAddress {
 			log.Printf("Transaction %s involves tracked address, calculating fee", tx.TxID)
 			// Calculate fee only for transactions involving tracked addresses
@@ -178,8 +179,13 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 						continue
 					}
 					prevTx := doge.DecodeTx(prevTxBytes)
+					if int(vin.VOut) >= len(prevTx.VOut) {
+						log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, vin.TxID, len(prevTx.VOut))
+						continue
+					}
+					prevOut := prevTx.VOut[vin.VOut]
 					if int(vin.VOut) < len(prevTx.VOut) {
-						totalInput += float64(prevTx.VOut[vin.VOut].Value) / 1e8
+						totalInput += float64(prevOut.Value) / 1e8
 						inputCount++
 					}
 				}
@@ -335,7 +341,7 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 				txIDHex := doge.HexEncodeReversed(vin.TxID)
 				prevTxData, err := blockchain.GetRawTransaction(txIDHex)
 				if err != nil {
-					log.Printf("Error getting previous transaction %s: %v", txIDHex, err)
+					// Skip coinbase transactions silently
 					continue
 				}
 
@@ -345,6 +351,11 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					continue
 				}
 				prevTx := doge.DecodeTx(prevTxBytes)
+				if int(vin.VOut) >= len(prevTx.VOut) {
+					log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, txIDHex, len(prevTx.VOut))
+					continue
+				}
+				prevOut := prevTx.VOut[vin.VOut]
 
 				// Check if the spent output belonged to a tracked address
 				if vin.VOut < uint32(len(prevTx.VOut)) {
@@ -451,6 +462,34 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 			}
 		}
 	}
+
+	// Update confirmations for all transactions in the block
+	for _, addrInfo := range trackedAddrs {
+		_, err := db.Exec(`
+			UPDATE transactions 
+			SET confirmations = CASE 
+				WHEN block_height IS NOT NULL THEN 
+					CASE 
+						WHEN CAST($1 - block_height + 1 AS INTEGER) > 50 THEN 50
+						ELSE CAST($1 - block_height + 1 AS INTEGER)
+					END
+				ELSE 1
+			END,
+			status = CASE 
+				WHEN block_height IS NOT NULL AND 
+					CASE 
+						WHEN CAST($1 - block_height + 1 AS INTEGER) > 50 THEN 50
+						ELSE CAST($1 - block_height + 1 AS INTEGER)
+					END >= $2 THEN 'confirmed' 
+				ELSE 'pending' 
+			END
+			WHERE address_id = $3
+		`, block.Height, addrInfo.requiredConfirmations, addrInfo.id)
+		if err != nil {
+			log.Printf("Error updating confirmations for address %d: %v", addrInfo.id, err)
+		}
+	}
+
 	log.Printf("Finished processing block %d", block.Height)
 
 	// Update balances for all tracked addresses
