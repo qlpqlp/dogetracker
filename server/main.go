@@ -133,7 +133,16 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					// Skip coinbase transactions silently
 					continue
 				}
-				prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
+				// Log the raw transaction data structure
+				log.Printf("Raw transaction data for %s: %+v", doge.HexEncodeReversed(vin.TxID), prevTxData)
+
+				hexData, ok := prevTxData["hex"].(string)
+				if !ok {
+					log.Printf("Error: hex field not found or not a string in transaction data for %s", doge.HexEncodeReversed(vin.TxID))
+					continue
+				}
+
+				prevTxBytes, err := doge.HexDecode(hexData)
 				if err != nil {
 					log.Printf("Error decoding previous transaction hex: %v", err)
 					continue
