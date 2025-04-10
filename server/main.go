@@ -855,12 +855,21 @@ func main() {
 	tipChanged := chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
 
 	// Walk the blockchain.
-	blocks, err := tracker.WalkTheDoge(ctx, tracker.TrackerOptions{
-		Chain:           &doge.DogeMainNetChain,
+	chain, err := tracker.ChainFromName("main")
+	if err != nil {
+		log.Fatalf("Error getting chain parameters: %v", err)
+	}
+
+	// Create the tracker options
+	opts := tracker.TrackerOptions{
+		Chain:           chain,
 		ResumeFromBlock: startBlockHash,
 		Client:          blockchain,
 		TipChanged:      tipChanged,
-	})
+		FullUndoBlocks:  true,
+	}
+
+	blocks, err := tracker.WalkTheDoge(ctx, opts)
 	if err != nil {
 		log.Printf("WalkTheDoge: %v", err)
 		os.Exit(1)
