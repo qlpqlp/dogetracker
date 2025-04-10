@@ -100,27 +100,13 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 	for txIndex, tx := range block.Block.Tx {
 		log.Printf("Processing %d/%d: %s", txIndex+1, len(block.Block.Tx), tx.TxID)
 
-		// Print raw transaction data
-		log.Printf("Raw transaction data for %s:", tx.TxID)
-		log.Printf("Version: %d", tx.Version)
-		log.Printf("LockTime: %d", tx.LockTime)
-		log.Printf("Number of inputs: %d", len(tx.VIn))
-		log.Printf("Number of outputs: %d", len(tx.VOut))
-
-		// Print input details
-		for i, vin := range tx.VIn {
-			log.Printf("Input %d:", i)
-			log.Printf("  TxID: %x", vin.TxID)
-			log.Printf("  VOut: %d", vin.VOut)
-			log.Printf("  Script: %x", vin.Script)
-			log.Printf("  Sequence: %d", vin.Sequence)
-		}
-
-		// Print output details
-		for i, vout := range tx.VOut {
-			log.Printf("Output %d:", i)
-			log.Printf("  Value: %d", vout.Value)
-			log.Printf("  Script: %x", vout.Script)
+		// Check if this is an AuxPow block (version >= 0x20000000)
+		if block.Block.Header.Version >= 0x20000000 {
+			log.Printf("Block %d is an AuxPow block, skipping special processing", block.Height)
+			// For AuxPow blocks, we only process the first transaction (coinbase)
+			if txIndex > 0 {
+				continue
+			}
 		}
 
 		// Check if this is a coinbase transaction
@@ -156,12 +142,6 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 				if len(vin.TxID) == 0 {
 					// This is a coinbase transaction, we can skip it
 					log.Printf("Skipping coinbase transaction %s", tx.TxID)
-					continue
-				}
-
-				// Skip if VOut is invalid (like in coinbase transactions)
-				if vin.VOut == 0xFFFFFFFF {
-					log.Printf("Skipping transaction with invalid VOut: %s", tx.TxID)
 					continue
 				}
 
