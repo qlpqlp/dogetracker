@@ -29,14 +29,15 @@ import (
 )
 
 var (
-	dbHost   string
-	dbPort   int
-	dbUser   string
-	dbPass   string
-	dbName   string
-	apiPort  int
-	apiToken string
-	nodeAddr string
+	dbHost     string
+	dbPort     int
+	dbUser     string
+	dbPass     string
+	dbName     string
+	apiPort    int
+	apiToken   string
+	nodeAddr   string
+	startBlock int64
 )
 
 func init() {
@@ -48,6 +49,7 @@ func init() {
 	flag.IntVar(&apiPort, "api-port", 8080, "API port")
 	flag.StringVar(&apiToken, "api-token", "", "API token")
 	flag.StringVar(&nodeAddr, "node", "qlplock.ddns.net:22556", "Dogecoin node address to connect to")
+	flag.Int64Var(&startBlock, "start-block", 0, "Block height to start syncing from")
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
@@ -226,36 +228,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create SPV node with specified peer
-	peers := []string{nodeAddr}
-	spvNode := doge.NewSPVNode(peers)
-
-	log.Printf("Attempting to connect to Dogecoin node at %s...", nodeAddr)
-
-	// Connect to peer with retry mechanism
-	var err error
-	for i := 0; i < 3; i++ {
-		if err = spvNode.ConnectToPeer(peers[0]); err == nil {
-			break
-		}
-		log.Printf("Connection attempt %d failed: %v", i+1, err)
-		if i < 2 { // Don't sleep on the last attempt
-			time.Sleep(5 * time.Second)
-		}
-	}
-
-	if err != nil {
-		log.Fatalf("Failed to connect to peer after 3 attempts: %v", err)
-	}
-
-	log.Printf("Successfully connected to Dogecoin node at %s", nodeAddr)
-
 	// Create database connection
 	db, err := tracker.NewDB(dbHost, dbPort, dbUser, dbPass, dbName)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
+
+	// Create SPV node with specified peer and start block
+	peers := []string{nodeAddr}
+	spvNode := doge.NewSPVNode(peers, uint32(startBlock), db)
+
+	log.Printf("Attempting to connect to Dogecoin node at %s...", nodeAddr)
+	log.Printf("Starting from block height %d", startBlock)
 
 	// Create tracker
 	t := tracker.NewTracker(db, spvNode)

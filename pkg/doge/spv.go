@@ -40,15 +40,17 @@ type Message struct {
 }
 
 // NewSPVNode creates a new SPV node
-func NewSPVNode(peers []string) *SPVNode {
-	log.Printf("Initializing SPV node with %d peers", len(peers))
+func NewSPVNode(peers []string, startHeight uint32, db Database) *SPVNode {
+	log.Printf("Initializing SPV node with %d peers, starting from height %d", len(peers), startHeight)
 	return &SPVNode{
 		headers:        make(map[uint32]BlockHeader),
 		blocks:         make(map[string]*Block),
 		peers:          peers,
 		watchAddresses: make(map[string]bool),
 		bloomFilter:    make([]byte, 256),
+		currentHeight:  startHeight,
 		verackReceived: make(chan struct{}),
+		db:             db,
 	}
 }
 
@@ -448,21 +450,31 @@ func (n *SPVNode) sendGetHeaders() error {
 	payload = append(payload, 0x01) // One hash
 
 	// Block locator hashes (32 bytes)
-	// Start with genesis block hash
-	genesisHash := [32]byte{
-		0x1a, 0x91, 0xe3, 0x4d, 0x1b, 0x4a, 0x4a, 0xba,
-		0x1e, 0xca, 0x0b, 0xfb, 0xc1, 0x67, 0x86, 0x86,
-		0x51, 0x31, 0xea, 0x5d, 0x5c, 0x51, 0x25, 0x25,
-		0x67, 0x9c, 0xba, 0x4f, 0xcb, 0x1f, 0x01, 0x00,
+	// Start with the block at current height
+	if n.currentHeight > 0 {
+		// Find the block hash at current height
+		for h, header := range n.headers {
+			if h == n.currentHeight {
+				// Calculate hash of the header
+				headerBytes := header.Serialize()
+				hash1 := sha256.Sum256(headerBytes)
+				hash2 := sha256.Sum256(hash1[:])
+				payload = append(payload, hash2[:]...)
+				break
+			}
+		}
+	} else {
+		// Start with genesis block hash
+		genesisHash, _ := hex.DecodeString(MainNetParams.GenesisBlock)
+		payload = append(payload, genesisHash...)
 	}
-	payload = append(payload, genesisHash[:]...)
 
 	// Stop hash (32 bytes) - all zeros to get all headers
-	stopHash := [32]byte{}
-	payload = append(payload, stopHash[:]...)
+	stopHash := make([]byte, 32)
+	payload = append(payload, stopHash...)
 
 	log.Printf("Sending getheaders message with payload length: %d", len(payload))
-	log.Printf("Requesting headers starting from genesis block: %x", genesisHash)
+	log.Printf("Requesting headers starting from height %d", n.currentHeight)
 	return n.sendMessage(MsgGetHeaders, payload)
 }
 
@@ -505,26 +517,41 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 
 		// Previous block hash (32 bytes)
 		if _, err := reader.Read(header.PrevBlock[:]); err != nil {
+			if err == io.EOF && i == count-1 {
+				break
+			}
 			return fmt.Errorf("error reading previous block hash: %v", err)
 		}
 
 		// Merkle root (32 bytes)
 		if _, err := reader.Read(header.MerkleRoot[:]); err != nil {
+			if err == io.EOF && i == count-1 {
+				break
+			}
 			return fmt.Errorf("error reading merkle root: %v", err)
 		}
 
 		// Time (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Time); err != nil {
+			if err == io.EOF && i == count-1 {
+				break
+			}
 			return fmt.Errorf("error reading header time: %v", err)
 		}
 
 		// Bits (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Bits); err != nil {
+			if err == io.EOF && i == count-1 {
+				break
+			}
 			return fmt.Errorf("error reading header bits: %v", err)
 		}
 
 		// Nonce (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Nonce); err != nil {
+			if err == io.EOF && i == count-1 {
+				break
+			}
 			return fmt.Errorf("error reading header nonce: %v", err)
 		}
 
@@ -532,7 +559,6 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		txCount, err := binary.ReadUvarint(reader)
 		if err != nil {
 			if err == io.EOF && i == count-1 {
-				// EOF at the end of the last header is expected
 				break
 			}
 			return fmt.Errorf("error reading transaction count: %v", err)
@@ -587,13 +613,22 @@ func (n *SPVNode) handleBlockMessage(payload []byte) error {
 	hash2 := sha256.Sum256(hash1[:])
 	blockHash := hex.EncodeToString(hash2[:])
 
-	// Store block
+	// Store block in memory
 	n.blocks[blockHash] = block
+
+	// Store block in database
+	if err := n.db.StoreBlock(block); err != nil {
+		log.Printf("Error storing block in database: %v", err)
+	}
 
 	// Process transactions
 	for _, tx := range block.Tx {
 		if n.ProcessTransaction(&tx) {
 			log.Printf("Found relevant transaction: %s", tx.TxID)
+			// Store transaction in database
+			if err := n.db.StoreTransaction(&tx, blockHash, block.Header.Height); err != nil {
+				log.Printf("Error storing transaction in database: %v", err)
+			}
 		}
 	}
 
@@ -614,6 +649,7 @@ func (n *SPVNode) handleInvMessage(payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("error reading inventory count: %v", err)
 	}
+	log.Printf("Received inventory message with %d items", count)
 
 	// Parse each inventory item
 	for i := uint64(0); i < count; i++ {
@@ -629,20 +665,24 @@ func (n *SPVNode) handleInvMessage(payload []byte) error {
 			return fmt.Errorf("error reading inventory hash: %v", err)
 		}
 
-		// If it's a block, request it
-		if invType == 2 { // MSG_BLOCK
-			log.Printf("Received block inventory: %x", hash)
-			// Create getdata message for the block
-			payload := make([]byte, 37) // 1 byte for count + 36 bytes for inventory
-			payload[0] = 1              // Count of inventory items
-			payload[1] = 2              // MSG_BLOCK type
-			copy(payload[2:], hash[:])
+		// Convert hash to hex string
+		hashStr := hex.EncodeToString(hash[:])
 
-			// Send getdata message
-			if err := n.sendMessage(MsgGetData, payload); err != nil {
-				return fmt.Errorf("failed to send getdata message: %v", err)
+		switch invType {
+		case 2: // MSG_BLOCK
+			log.Printf("Received block inventory: %s", hashStr)
+			// Request the block
+			if err := n.sendGetData(invType, hash); err != nil {
+				log.Printf("Error requesting block: %v", err)
 			}
-			log.Printf("Sent getdata message for block %x", hash)
+		case 1: // MSG_TX
+			log.Printf("Received transaction inventory: %s", hashStr)
+			// Request the transaction
+			if err := n.sendGetData(invType, hash); err != nil {
+				log.Printf("Error requesting transaction: %v", err)
+			}
+		default:
+			log.Printf("Received unknown inventory type %d: %s", invType, hashStr)
 		}
 	}
 
@@ -652,6 +692,7 @@ func (n *SPVNode) handleInvMessage(payload []byte) error {
 // handlePingMessage handles a ping message
 func (n *SPVNode) handlePingMessage(payload []byte) error {
 	// Send pong message with same nonce
+	log.Printf("Received ping message, sending pong")
 	return n.sendMessage(MsgPong, payload)
 }
 

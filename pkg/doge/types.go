@@ -81,6 +81,16 @@ type SPVNode struct {
 	bloomFilter    []byte
 	currentHeight  uint32
 	verackReceived chan struct{}
+	db             Database
+}
+
+// Database interface for storing blocks and transactions
+type Database interface {
+	StoreBlock(block *Block) error
+	StoreTransaction(tx *Transaction, blockHash string, blockHeight uint32) error
+	GetBlock(hash string) (*Block, error)
+	GetTransaction(txid string) (*Transaction, error)
+	GetBlockHeight(hash string) (uint32, error)
 }
 
 // Blockchain represents a connection to a Dogecoin node
