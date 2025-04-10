@@ -68,27 +68,62 @@ func (n *SPVNode) ConnectToPeer(peer string) error {
 	// Send version message
 	log.Printf("Sending version message...")
 	if err := n.sendVersionMessage(); err != nil {
+		n.conn.Close()
 		return fmt.Errorf("failed to send version message: %v", err)
+	}
+
+	// Wait for version message from peer
+	log.Printf("Waiting for version message from peer...")
+	msg, err := n.readMessage()
+	if err != nil {
+		n.conn.Close()
+		return fmt.Errorf("failed to read version message: %v", err)
+	}
+
+	command := string(bytes.TrimRight(msg.Command[:], "\x00"))
+	if command != MsgVersion {
+		n.conn.Close()
+		return fmt.Errorf("expected version message, got %s", command)
+	}
+
+	// Handle version message
+	if err := n.handleVersionMessage(msg.Payload); err != nil {
+		n.conn.Close()
+		return fmt.Errorf("failed to handle version message: %v", err)
+	}
+
+	// Send verack
+	log.Printf("Sending verack...")
+	if err := n.sendMessage(MsgVerack, nil); err != nil {
+		n.conn.Close()
+		return fmt.Errorf("failed to send verack: %v", err)
 	}
 
 	// Wait for verack
 	log.Printf("Waiting for verack...")
-	select {
-	case <-n.verackReceived:
-		log.Printf("Received verack from peer")
-	case <-time.After(30 * time.Second):
-		return fmt.Errorf("timeout waiting for verack")
+	msg, err = n.readMessage()
+	if err != nil {
+		n.conn.Close()
+		return fmt.Errorf("failed to read verack: %v", err)
+	}
+
+	command = string(bytes.TrimRight(msg.Command[:], "\x00"))
+	if command != MsgVerack {
+		n.conn.Close()
+		return fmt.Errorf("expected verack message, got %s", command)
 	}
 
 	// Send filter load message
 	log.Printf("Sending filter load message...")
 	if err := n.sendFilterLoadMessage(); err != nil {
+		n.conn.Close()
 		return fmt.Errorf("failed to send filter load message: %v", err)
 	}
 
 	// Send getheaders message
 	log.Printf("Sending getheaders message...")
 	if err := n.sendGetHeaders(); err != nil {
+		n.conn.Close()
 		return fmt.Errorf("failed to send getheaders message: %v", err)
 	}
 
