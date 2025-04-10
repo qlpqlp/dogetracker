@@ -770,7 +770,7 @@ func parseTransaction(payload []byte) (Transaction, int, error) {
 	}
 
 	tx := Transaction{
-		Version: int32(binary.LittleEndian.Uint32(payload[0:4])),
+		Version: binary.LittleEndian.Uint32(payload[0:4]),
 	}
 
 	// Parse input count

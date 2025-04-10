@@ -17,7 +17,7 @@ func DecodeBlock(data []byte) (*Block, error) {
 
 	// Decode version
 	versionBytes := data[offset : offset+4]
-	block.Header.Version = int32(binary.LittleEndian.Uint32(versionBytes))
+	block.Header.Version = binary.LittleEndian.Uint32(versionBytes)
 	offset += 4
 
 	// Decode previous block hash

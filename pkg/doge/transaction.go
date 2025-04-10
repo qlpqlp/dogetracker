@@ -18,7 +18,7 @@ func DecodeTransaction(data []byte) (*Transaction, error) {
 	}
 
 	// Read version
-	tx.Version = binary.LittleEndian.Uint32(data[0:4])
+	tx.Version = uint32(binary.LittleEndian.Uint32(data[0:4]))
 	offset := 4
 
 	// Read number of inputs
@@ -78,7 +78,8 @@ func DecodeTransaction(data []byte) (*Transaction, error) {
 		}
 
 		output := TxOutput{}
-		output.Value = int64(binary.LittleEndian.Uint64(data[offset : offset+8]))
+		value := binary.LittleEndian.Uint64(data[offset : offset+8])
+		output.Value = value
 		offset += 8
 
 		// Read script length

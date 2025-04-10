@@ -45,7 +45,7 @@ type BlockchainBlock struct {
 
 // Transaction represents a Dogecoin transaction
 type Transaction struct {
-	Version  int32
+	Version  uint32
 	TxID     string
 	Inputs   []TxInput
 	Outputs  []TxOutput
