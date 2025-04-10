@@ -322,12 +322,21 @@ func (n *SPVNode) sendGetHeaders() error {
 	payload = append(payload, 0x01) // One hash
 
 	// Block locator hashes (32 bytes)
-	payload = append(payload, make([]byte, 32)...) // Genesis block hash
+	// Start with genesis block hash
+	genesisHash := [32]byte{
+		0x1a, 0x91, 0xe3, 0x4d, 0x1b, 0x4a, 0x4a, 0xba,
+		0x1e, 0xca, 0x0b, 0xfb, 0xc1, 0x67, 0x86, 0x86,
+		0x51, 0x31, 0xea, 0x5d, 0x5c, 0x51, 0x25, 0x25,
+		0x67, 0x9c, 0xba, 0x4f, 0xcb, 0x1f, 0x01, 0x00,
+	}
+	payload = append(payload, genesisHash[:]...)
 
-	// Stop hash (32 bytes)
-	payload = append(payload, make([]byte, 32)...) // Zero hash to get all headers
+	// Stop hash (32 bytes) - all zeros to get all headers
+	stopHash := [32]byte{}
+	payload = append(payload, stopHash[:]...)
 
 	log.Printf("Sending getheaders message with payload length: %d", len(payload))
+	log.Printf("Requesting headers starting from genesis block: %x", genesisHash)
 	return n.sendMessage(MsgGetHeaders, payload)
 }
 
@@ -389,9 +398,29 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			return fmt.Errorf("error reading header nonce: %v", err)
 		}
 
+		// Set height based on previous block
+		if i == 0 {
+			// First header is at height 0
+			header.Height = 0
+		} else {
+			// Find previous header and increment height
+			for h, prevHeader := range n.headers {
+				if bytes.Equal(prevHeader.PrevBlock[:], header.PrevBlock[:]) {
+					header.Height = h + 1
+					break
+				}
+			}
+		}
+
 		// Store header
 		n.headers[header.Height] = header
 		log.Printf("Stored header at height %d", header.Height)
+
+		// Update current height if this is the highest header
+		if header.Height > n.currentHeight {
+			n.currentHeight = header.Height
+			log.Printf("Updated current height to %d", n.currentHeight)
+		}
 	}
 
 	return nil
