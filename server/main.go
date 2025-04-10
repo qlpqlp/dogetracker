@@ -240,9 +240,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create SPV node with qlpqlp.ddns.net as peer
+	// Create SPV node with qlplock.ddns.net as peer
 	peers := []string{
-		"qlpqlp.ddns.net:22556", // Custom node
+		"qlplock.ddns.net:22556", // Custom node
 	}
 	spvNode := doge.NewSPVNode(peers)
 
