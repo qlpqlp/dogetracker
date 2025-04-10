@@ -1,6 +1,9 @@
 package doge
 
-import "errors"
+import (
+	"errors"
+	"log"
+)
 
 // Transaction represents a Dogecoin transaction
 type Transaction struct {
@@ -60,11 +63,17 @@ func DecodeTransaction(data []byte) (*Transaction, error) {
 		return nil, ErrInvalidTransaction
 	}
 
+	// Log transaction data details
+	log.Printf("Transaction data length: %d bytes", len(data))
+	if len(data) > 0 {
+		log.Printf("First 32 bytes of transaction data: %x", data[:32])
+	}
+
 	tx := &Transaction{}
 	offset := 0
 
 	// Version
-	tx.Version = uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16 | uint32(data[3])<<24
+	tx.Version = uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
 	offset += 4
 
 	// Input count

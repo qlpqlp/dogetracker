@@ -3,6 +3,7 @@ package doge
 import (
 	"encoding/hex"
 	"errors"
+	"log"
 )
 
 // HexDecode decodes a hex string into bytes
@@ -22,6 +23,9 @@ func DecodeBlock(data []byte) (*Block, error) {
 	// Decode header
 	block.Header.Version = uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
 	offset += 4
+
+	// Log block version and type
+	log.Printf("Block version: %x (is AuxPow: %v)", block.Header.Version, block.Header.Version >= 0x20000000)
 
 	block.Header.PrevBlock = make([]byte, 32)
 	copy(block.Header.PrevBlock, data[offset:offset+32])
@@ -43,6 +47,7 @@ func DecodeBlock(data []byte) (*Block, error) {
 	// Check if this is an AuxPow block
 	isAuxPow := block.Header.Version >= 0x20000000
 	if isAuxPow {
+		log.Printf("Processing AuxPow block, skipping AuxPow data")
 		// For AuxPow blocks, we need to handle the special structure
 		// 1. First comes the transaction count (varint)
 		txCount, n := DecodeVarInt(data[offset:])
@@ -50,6 +55,7 @@ func DecodeBlock(data []byte) (*Block, error) {
 			return nil, errors.New("invalid transaction count")
 		}
 		offset += n
+		log.Printf("AuxPow block has %d transactions", txCount)
 
 		if txCount > 0 {
 			// 2. The first transaction is the coinbase transaction
@@ -57,9 +63,11 @@ func DecodeBlock(data []byte) (*Block, error) {
 			// and skip the rest of the AuxPow data
 			tx, err := DecodeTransaction(data[offset:])
 			if err != nil {
+				log.Printf("Error decoding coinbase transaction in AuxPow block: %v", err)
 				return nil, err
 			}
 			block.Tx = append(block.Tx, *tx)
+			log.Printf("Successfully decoded coinbase transaction in AuxPow block")
 
 			// Skip the rest of the AuxPow data
 			// The AuxPow data structure is:
@@ -79,11 +87,13 @@ func DecodeBlock(data []byte) (*Block, error) {
 		return nil, errors.New("invalid transaction count")
 	}
 	offset += n
+	log.Printf("Regular block has %d transactions", txCount)
 
 	block.Tx = make([]Transaction, txCount)
 	for i := uint64(0); i < txCount; i++ {
 		tx, err := DecodeTransaction(data[offset:])
 		if err != nil {
+			log.Printf("Error decoding transaction %d in regular block: %v", i, err)
 			return nil, err
 		}
 		block.Tx[i] = *tx
