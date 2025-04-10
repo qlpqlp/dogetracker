@@ -56,48 +56,45 @@ func NewSPVNode(peers []string, startHeight uint32, db Database) *SPVNode {
 
 // ConnectToPeer connects to a peer
 func (n *SPVNode) ConnectToPeer(peer string) error {
-	log.Printf("Attempting to establish TCP connection to %s", peer)
-	conn, err := net.DialTimeout("tcp", peer, 10*time.Second)
+	log.Printf("Connecting to peer %s...", peer)
+	// Connect to peer
+	conn, err := net.Dial("tcp", peer)
 	if err != nil {
-		return fmt.Errorf("failed to connect to peer %s: %v", peer, err)
+		return fmt.Errorf("failed to connect to peer: %v", err)
 	}
 	n.conn = conn
-	log.Printf("TCP connection established to %s", peer)
-
-	// Start message handling loop
-	go n.handleMessages()
+	log.Printf("Connected to peer %s", peer)
 
 	// Send version message
-	log.Printf("Sending version message to %s", peer)
+	log.Printf("Sending version message...")
 	if err := n.sendVersionMessage(); err != nil {
-		n.conn.Close()
 		return fmt.Errorf("failed to send version message: %v", err)
 	}
-	log.Printf("Version message sent successfully to %s", peer)
 
 	// Wait for verack
+	log.Printf("Waiting for verack...")
 	select {
-	case <-time.After(10 * time.Second):
-		n.conn.Close()
-		return fmt.Errorf("timeout waiting for verack")
 	case <-n.verackReceived:
-		log.Printf("Received verack from %s", peer)
+		log.Printf("Received verack from peer")
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("timeout waiting for verack")
 	}
 
 	// Send filter load message
-	log.Printf("Sending filter load message to %s", peer)
+	log.Printf("Sending filter load message...")
 	if err := n.sendFilterLoadMessage(); err != nil {
-		n.conn.Close()
 		return fmt.Errorf("failed to send filter load message: %v", err)
 	}
-	log.Printf("Filter load message sent successfully to %s", peer)
 
-	// Request headers
-	log.Printf("Requesting headers from %s", peer)
+	// Send getheaders message
+	log.Printf("Sending getheaders message...")
 	if err := n.sendGetHeaders(); err != nil {
-		n.conn.Close()
 		return fmt.Errorf("failed to send getheaders message: %v", err)
 	}
+
+	// Start message handling goroutine
+	log.Printf("Starting message handling goroutine...")
+	go n.handleMessages()
 
 	return nil
 }
