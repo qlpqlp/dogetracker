@@ -24,8 +24,11 @@ type TxIn struct {
 
 // TxOut represents a transaction output
 type TxOut struct {
-	Value  int64
-	Script []byte
+	Value        int64
+	Script       []byte
+	ScriptPubKey struct {
+		Addresses []string
+	}
 }
 
 // DecodeVarInt decodes a variable length integer from the input bytes
