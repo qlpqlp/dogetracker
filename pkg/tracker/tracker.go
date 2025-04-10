@@ -8,6 +8,7 @@ package tracker
 
 import (
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -60,6 +61,20 @@ type DogeTracker struct {
 	stop           <-chan struct{} // ctx.Done() channel.
 	stopping       bool            // set to exit the main loop.
 	fullUndoBlocks bool            // fully decode blocks in UndoForkBlocks
+}
+
+// Tracker handles block processing and transaction tracking
+type Tracker struct {
+	db      *sql.DB
+	spvNode *doge.SPVNode
+}
+
+// NewTracker creates a new tracker
+func NewTracker(db *sql.DB, spvNode *doge.SPVNode) *Tracker {
+	return &Tracker{
+		db:      db,
+		spvNode: spvNode,
+	}
 }
 
 /*
@@ -323,26 +338,26 @@ func (c *DogeTracker) processBlock(block *ChainBlock) {
 		log.Printf("Processing %d/%d: %s", i+1, len(block.Block.Tx), tx.TxID)
 
 		// Check if this is a coinbase transaction
-		isCoinbase := len(tx.VIn) > 0 && len(tx.VIn[0].TxID) == 0
+		isCoinbase := len(tx.Inputs) > 0 && len(tx.Inputs[0].PreviousOutput.Hash) == 0
 		if isCoinbase {
 			log.Printf("Transaction %s is a coinbase transaction", tx.TxID)
 			continue
 		}
 
 		// Process inputs
-		for _, vin := range tx.VIn {
+		for _, input := range tx.Inputs {
 			// Skip coinbase transactions
-			if len(vin.TxID) == 0 {
+			if len(input.PreviousOutput.Hash) == 0 {
 				continue
 			}
 			// Process input
-			log.Printf("Processing input from transaction %x", vin.TxID)
+			log.Printf("Processing input from transaction %x", input.PreviousOutput.Hash)
 		}
 
 		// Process outputs
-		for i, vout := range tx.VOut {
+		for i, output := range tx.Outputs {
 			// Process output
-			log.Printf("Processing output %d with value %d", i, vout.Value)
+			log.Printf("Processing output %d with value %d", i, output.Value)
 		}
 	}
 }
@@ -379,4 +394,40 @@ func DecodeVarInt(data []byte) (uint64, int) {
 		return uint64(data[1]) | uint64(data[2])<<8 | uint64(data[3])<<16 | uint64(data[4])<<24 |
 			uint64(data[5])<<32 | uint64(data[6])<<40 | uint64(data[7])<<48 | uint64(data[8])<<56, 9
 	}
+}
+
+// storeTransaction stores a transaction in the database
+func (t *Tracker) storeTransaction(tx *doge.Transaction, addresses []string) error {
+	// Start transaction
+	dbTx, err := t.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer dbTx.Rollback()
+
+	// Insert transaction
+	_, err = dbTx.Exec(`
+		INSERT INTO transactions (txid, block_height, timestamp)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (txid) DO NOTHING
+	`, tx.TxID, 0, time.Now()) // TODO: Get block height from somewhere
+	if err != nil {
+		return err
+	}
+
+	// Insert transaction outputs
+	for _, output := range tx.Outputs {
+		for _, addr := range output.Addresses {
+			_, err = dbTx.Exec(`
+				INSERT INTO transaction_outputs (txid, address, value)
+				VALUES ($1, $2, $3)
+			`, tx.TxID, addr, output.Value)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// Commit transaction
+	return dbTx.Commit()
 }

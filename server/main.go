@@ -14,41 +14,53 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 
 	"github.com/dogeorg/doge"
 	_ "github.com/lib/pq"
-	"github.com/qlpqlp/dogetracker/pkg/chaser"
-	"github.com/qlpqlp/dogetracker/pkg/core"
-	"github.com/qlpqlp/dogetracker/pkg/mempool"
 	"github.com/qlpqlp/dogetracker/pkg/tracker"
-	"github.com/qlpqlp/dogetracker/server/api"
 	serverdb "github.com/qlpqlp/dogetracker/server/db"
 )
 
-type Config struct {
-	rpcHost   string
-	rpcPort   int
-	rpcUser   string
-	rpcPass   string
-	zmqHost   string
-	zmqPort   int
-	batchSize int
-
-	// PostgreSQL configuration
-	dbHost string
-	dbPort int
-	dbUser string
-	dbPass string
-	dbName string
-
-	// API configuration
+var (
+	rpcHost    string
+	rpcPort    int
+	rpcUser    string
+	rpcPass    string
+	zmqHost    string
+	zmqPort    int
+	batchSize  int
+	dbHost     string
+	dbPort     int
+	dbUser     string
+	dbPass     string
+	dbName     string
 	apiPort    int
 	apiToken   string
-	startBlock string
+	startBlock int64
+)
+
+func init() {
+	flag.StringVar(&rpcHost, "rpc-host", "localhost", "RPC host")
+	flag.IntVar(&rpcPort, "rpc-port", 22555, "RPC port")
+	flag.StringVar(&rpcUser, "rpc-user", "", "RPC username")
+	flag.StringVar(&rpcPass, "rpc-pass", "", "RPC password")
+	flag.StringVar(&zmqHost, "zmq-host", "localhost", "Dogecoin ZMQ host")
+	flag.IntVar(&zmqPort, "zmq-port", 28332, "Dogecoin ZMQ port")
+	flag.IntVar(&batchSize, "batch-size", 100, "Batch size for processing transactions")
+	flag.StringVar(&dbHost, "db-host", "localhost", "Database host")
+	flag.IntVar(&dbPort, "db-port", 5432, "Database port")
+	flag.StringVar(&dbUser, "db-user", "postgres", "Database username")
+	flag.StringVar(&dbPass, "db-pass", "", "Database password")
+	flag.StringVar(&dbName, "db-name", "dogetracker", "Database name")
+	flag.IntVar(&apiPort, "api-port", 8080, "API port")
+	flag.StringVar(&apiToken, "api-token", "", "API token")
+	flag.Int64Var(&startBlock, "start-block", 0, "Start block height")
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
@@ -217,200 +229,60 @@ func HandleChainReorganization(db *sql.DB, undo *tracker.UndoForkBlocks) error {
 }
 
 func main() {
-	// Define command line flags
-	rpcHost := flag.String("rpc-host", getEnvOrDefault("DOGE_RPC_HOST", "127.0.0.1"), "Dogecoin RPC host")
-	rpcPort := flag.Int("rpc-port", getEnvIntOrDefault("DOGE_RPC_PORT", 22555), "Dogecoin RPC port")
-	rpcUser := flag.String("rpc-user", getEnvOrDefault("DOGE_RPC_USER", "dogecoin"), "Dogecoin RPC username")
-	rpcPass := flag.String("rpc-pass", getEnvOrDefault("DOGE_RPC_PASS", "dogecoin"), "Dogecoin RPC password")
-	zmqHost := flag.String("zmq-host", getEnvOrDefault("DOGE_ZMQ_HOST", "127.0.0.1"), "Dogecoin ZMQ host")
-	zmqPort := flag.Int("zmq-port", getEnvIntOrDefault("DOGE_ZMQ_PORT", 28332), "Dogecoin ZMQ port")
-
-	// PostgreSQL flags
-	dbHost := flag.String("db-host", getEnvOrDefault("DB_HOST", "localhost"), "PostgreSQL host")
-	dbPort := flag.Int("db-port", getEnvIntOrDefault("DB_PORT", 5432), "PostgreSQL port")
-	dbUser := flag.String("db-user", getEnvOrDefault("DB_USER", "postgres"), "PostgreSQL username")
-	dbPass := flag.String("db-pass", getEnvOrDefault("DB_PASS", "postgres"), "PostgreSQL password")
-	dbName := flag.String("db-name", getEnvOrDefault("DB_NAME", "dogetracker"), "PostgreSQL database name")
-
-	// API flags
-	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 420), "API server port")
-	apiToken := flag.String("api-token", getEnvOrDefault("API_TOKEN", ""), "API bearer token for authentication")
-	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "DTqAFgNNUgiPEfGmc4HZUkqJ4sz5vADd1n"), "Starting block hash or height to begin processing from")
-
-	// Parse command line flags
 	flag.Parse()
 
-	config := Config{
-		rpcHost:    *rpcHost,
-		rpcPort:    *rpcPort,
-		rpcUser:    *rpcUser,
-		rpcPass:    *rpcPass,
-		zmqHost:    *zmqHost,
-		zmqPort:    *zmqPort,
-		dbHost:     *dbHost,
-		dbPort:     *dbPort,
-		dbUser:     *dbUser,
-		dbPass:     *dbPass,
-		dbName:     *dbName,
-		apiPort:    *apiPort,
-		apiToken:   *apiToken,
-		startBlock: *startBlock,
+	// Create SPV node
+	spvNode := doge.NewSPVNode()
+
+	// Connect to a peer
+	if err := spvNode.ConnectToPeer(spvNode.peers[0]); err != nil {
+		log.Fatalf("Failed to connect to peer: %v", err)
 	}
 
-	// Connect to PostgreSQL
-	dbConnStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-		config.dbHost, config.dbPort, config.dbUser, config.dbPass, config.dbName)
-	db, err := sql.Open("postgres", dbConnStr)
+	// Create database connection
+	db, err := tracker.NewDB(dbHost, dbPort, dbUser, dbPass, dbName)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
 
-	// Initialize database schema
-	if err := serverdb.InitDB(db); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
-	}
+	// Create tracker
+	t := tracker.NewTracker(db, spvNode)
 
-	// Get last processed block from database
-	lastBlockHash, _, err := serverdb.GetLastProcessedBlock(db)
-	if err != nil {
-		log.Printf("Failed to get last processed block: %v", err)
-		// Use default block if database query fails
-		lastBlockHash = *startBlock
-	}
-
-	log.Printf("Connecting to Dogecoin node at %s:%d", config.rpcHost, config.rpcPort)
-
-	ctx, shutdown := context.WithCancel(context.Background())
-
-	// Core Node blockchain access.
-	blockchain := core.NewCoreRPCClient(config.rpcHost, config.rpcPort, config.rpcUser, config.rpcPass)
-
-	// Check if startBlock is a block height (numeric) or block hash
-	var startBlockHash string
-	if blockHeight, err := strconv.ParseInt(*startBlock, 10, 64); err == nil {
-		// It's a block height, get the corresponding block hash
-		startBlockHash, err = blockchain.GetBlockHash(blockHeight)
-		if err != nil {
-			log.Printf("Failed to get block hash for height %d: %v", blockHeight, err)
-			startBlockHash = lastBlockHash // Fall back to last processed block
-		} else {
-			log.Printf("Starting from block height %d (hash: %s)", blockHeight, startBlockHash)
-		}
-	} else {
-		// It's already a block hash
-		startBlockHash = *startBlock
-		log.Printf("Starting from block hash: %s", startBlockHash)
-	}
-
-	// Get tracked addresses from database
-	rows, err := db.Query(`SELECT address FROM tracked_addresses`)
-	if err != nil {
-		log.Printf("Failed to get tracked addresses: %v", err)
-	} else {
-		defer rows.Close()
-
-		var trackedAddresses []string
-		for rows.Next() {
-			var addr string
-			if err := rows.Scan(&addr); err != nil {
-				log.Printf("Error scanning tracked address: %v", err)
-				continue
-			}
-			trackedAddresses = append(trackedAddresses, addr)
-		}
-
-		log.Printf("Found %d tracked addresses", len(trackedAddresses))
-
-		// Initialize mempool tracker with actual tracked addresses
-		mempoolTracker := mempool.NewMempoolTracker(blockchain, db, trackedAddresses)
-		go mempoolTracker.Start(ctx)
-
-		// Start API server with mempool tracker
-		apiServer := api.NewServer(db, config.apiToken, mempoolTracker)
-		go func() {
-			log.Printf("Starting API server on port %d", config.apiPort)
-			if err := apiServer.Start(config.apiPort); err != nil {
-				log.Printf("API server error: %v", err)
-			}
-		}()
-	}
-
-	// Watch for new blocks.
-	zmqTip, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
-	if err != nil {
-		log.Printf("CoreZMQListener: %v", err)
-		os.Exit(1)
-	}
-	tipChanged := chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
-
-	// Walk the blockchain.
-	chain, err := tracker.ChainFromName("main")
-	if err != nil {
-		log.Fatalf("Error getting chain parameters: %v", err)
-	}
-
-	// Create the tracker options
-	opts := tracker.TrackerOptions{
-		Chain:           chain,
-		ResumeFromBlock: startBlockHash,
-		Client:          blockchain,
-		TipChanged:      tipChanged,
-		FullUndoBlocks:  true,
-	}
-
-	blocks, err := tracker.WalkTheDoge(ctx, opts)
-	if err != nil {
-		log.Printf("WalkTheDoge: %v", err)
-		os.Exit(1)
-	}
-
-	// Process blocks and update database
+	// Start block processing
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case b := <-blocks:
-				if b.Block != nil {
-					log.Printf("Processing block: %v (%v)", b.Block.Hash, b.Block.Height)
-					// Update last processed block in database
-					if err := serverdb.UpdateLastProcessedBlock(db, b.Block.Hash, b.Block.Height); err != nil {
-						log.Printf("Failed to update last processed block: %v", err)
-					}
-
-					// Process block transactions and update database
-					if err := ProcessBlockTransactions(b.Block, db, make(map[string]bool)); err != nil {
-						log.Printf("Failed to process block transactions: %v", err)
-					}
-				} else {
-					log.Printf("Undoing to: %v (%v)", b.Undo.ResumeFromBlock, b.Undo.LastValidHeight)
-
-					// Handle chain reorganization
-					if err := HandleChainReorganization(db, b.Undo); err != nil {
-						log.Printf("Failed to handle chain reorganization: %v", err)
-					}
-				}
-			}
+		defer wg.Done()
+		if err := t.ProcessBlocks(ctx, startBlock); err != nil {
+			log.Printf("Error processing blocks: %v", err)
 		}
 	}()
 
-	// Hook ^C signal.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	// Start API server
+	api := tracker.NewAPI(t, apiToken)
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%d", apiPort),
+		Handler: api,
+	}
+
 	go func() {
-		for {
-			select {
-			case sig := <-sigCh: // sigterm/sigint caught
-				log.Printf("Caught %v signal, shutting down", sig)
-				shutdown()
-				continue
-			case <-ctx.Done():
-				return
-			}
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start API server: %v", err)
 		}
 	}()
 
-	// Wait for shutdown.
-	<-ctx.Done()
+	// Wait for interrupt signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	// Shutdown
+	log.Println("Shutting down...")
+	cancel()
+	if err := server.Shutdown(context.Background()); err != nil {
+		log.Printf("Error shutting down server: %v", err)
+	}
+	wg.Wait()
 }
