@@ -364,6 +364,9 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 	}
 	log.Printf("Headers count: %d", count)
 
+	// Keep track of the last header we processed
+	var lastHeader *BlockHeader
+
 	// Parse each header
 	for i := uint64(0); i < count; i++ {
 		header := BlockHeader{}
@@ -398,18 +401,16 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			return fmt.Errorf("error reading header nonce: %v", err)
 		}
 
-		// Set height based on previous block
-		if i == 0 {
+		// Calculate height based on previous header
+		if lastHeader == nil {
 			// First header is at height 0
 			header.Height = 0
 		} else {
-			// Find previous header and increment height
-			for h, prevHeader := range n.headers {
-				if bytes.Equal(prevHeader.PrevBlock[:], header.PrevBlock[:]) {
-					header.Height = h + 1
-					break
-				}
+			// Verify chain structure
+			if !bytes.Equal(lastHeader.PrevBlock[:], header.PrevBlock[:]) {
+				return fmt.Errorf("chain structure broken at height %d", i)
 			}
+			header.Height = lastHeader.Height + 1
 		}
 
 		// Store header
@@ -421,6 +422,9 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			n.currentHeight = header.Height
 			log.Printf("Updated current height to %d", n.currentHeight)
 		}
+
+		// Update last header
+		lastHeader = &header
 	}
 
 	return nil
