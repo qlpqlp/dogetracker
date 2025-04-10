@@ -8,9 +8,9 @@ package tracker
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log"
-	"strconv"
 	"time"
 
 	"github.com/qlpqlp/dogetracker/pkg/doge"
@@ -157,82 +157,10 @@ func (c *DogeTracker) followTheChain(nextBlockHash string) (lastProcessed string
 			// Output the decoded block.
 			blockData := c.fetchBlockData(head.Hash)
 
-			// Check if this is an AuxPow block
-			isAuxPow := head.Version >= 0x20000000
-			if isAuxPow {
-				log.Printf("Block %d is an AuxPow block, skipping AuxPow data", head.Height)
-				// For AuxPow blocks, we'll create a block with just the header
-				// and skip the AuxPow data
-				prevBlock, err := doge.HexDecode(head.PreviousBlockHash)
-				if err != nil {
-					log.Printf("Error decoding previous block hash: %v", err)
-					continue
-				}
-				merkleRoot, err := doge.HexDecode(head.MerkleRoot)
-				if err != nil {
-					log.Printf("Error decoding merkle root: %v", err)
-					continue
-				}
-				bits, err := strconv.ParseUint(head.Bits, 16, 32)
-				if err != nil {
-					log.Printf("Error parsing bits: %v", err)
-					continue
-				}
-
-				block := &ChainBlock{
-					Hash:   head.Hash,
-					Height: head.Height,
-					Block: doge.Block{
-						Header: doge.BlockHeader{
-							Version:    head.Version,
-							PrevBlock:  prevBlock,
-							MerkleRoot: merkleRoot,
-							Timestamp:  uint32(head.Time),
-							Bits:       uint32(bits),
-							Nonce:      head.Nonce,
-						},
-						Tx: []doge.Transaction{}, // Initialize empty transaction slice
-					},
-				}
-
-				// For AuxPow blocks, we need to properly handle the AuxPow structure
-				if len(blockData) > 80 {
-					// Skip the 80-byte header
-					data := blockData[80:]
-
-					// First, decode the coinbase transaction length
-					txLen, bytesRead := DecodeVarInt(data)
-					if bytesRead == 0 {
-						log.Printf("Error decoding transaction length in AuxPow block")
-						continue
-					}
-
-					// Skip the AuxPow data and get to the actual transaction
-					// The AuxPow data structure is:
-					// 1. Coinbase transaction
-					// 2. AuxPow block header (80 bytes)
-					// 3. AuxPow Merkle branch
-					// 4. AuxPow parent block header (80 bytes)
-					// We need to skip all of this to get to the actual transaction
-					auxPowDataLength := int(txLen) + 80 + 80 // Coinbase tx + AuxPow header + parent header
-					if len(data) < bytesRead+auxPowDataLength {
-						log.Printf("Error: AuxPow data length exceeds available data")
-						continue
-					}
-
-					// Skip the AuxPow data to get to the actual transaction
-					txBytes := data[bytesRead+auxPowDataLength:]
-					tx, err := doge.DecodeTx(txBytes)
-					if err != nil {
-						log.Printf("Error decoding transaction in AuxPow block: %v", err)
-						continue
-					}
-					block.Block.Tx = append(block.Block.Tx, *tx)
-				}
-				c.output <- BlockOrUndo{Block: block}
-				lastProcessed = block.Hash
-				nextBlockHash = head.NextBlockHash
-				continue
+			// Log block data details
+			log.Printf("Block data length: %d bytes", len(blockData))
+			if len(blockData) > 0 {
+				log.Printf("First 32 bytes of block data: %x", blockData[:32])
 			}
 
 			block := &ChainBlock{
@@ -242,20 +170,22 @@ func (c *DogeTracker) followTheChain(nextBlockHash string) (lastProcessed string
 			decodedBlock, err := doge.DecodeBlock(blockData)
 			if err != nil {
 				log.Printf("Error decoding block: %v", err)
+				log.Printf("Block version: %x", binary.LittleEndian.Uint32(blockData[:4]))
 				continue
 			}
 			block.Block = *decodedBlock
 			c.output <- BlockOrUndo{Block: block}
 			lastProcessed = block.Hash
 			nextBlockHash = head.NextBlockHash
-		} else {
-			// This block is no longer on-chain.
-			// Roll back until we find a block that is on-chain.
-			undo, nextBlock := c.undoBlocks(head)
-			c.output <- BlockOrUndo{Undo: undo}
-			lastProcessed = undo.ResumeFromBlock
-			nextBlockHash = nextBlock
+			continue
 		}
+
+		// This block is no longer on-chain.
+		// Roll back until we find a block that is on-chain.
+		undo, nextBlock := c.undoBlocks(head)
+		c.output <- BlockOrUndo{Undo: undo}
+		lastProcessed = undo.ResumeFromBlock
+		nextBlockHash = nextBlock
 		c.checkShutdown() // loops must check for shutdown.
 	}
 	return
