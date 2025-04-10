@@ -13,7 +13,7 @@ type BlockDatabase interface {
 	StoreTransaction(tx *Transaction, blockHash string, blockHeight uint32) error
 	GetBlock(hash string) (*Block, error)
 	GetTransaction(txid string) (*Transaction, error)
-	GetBlockHeight() (uint32, error)
+	GetBlockHeight(hash string) (uint32, error)
 }
 
 // SQLDatabase implements the BlockDatabase interface using SQL
@@ -270,14 +270,18 @@ func (d *SQLDatabase) GetTransaction(txid string) (*Transaction, error) {
 	return &tx, nil
 }
 
-// GetBlockHeight retrieves the current block height from the database
-func (d *SQLDatabase) GetBlockHeight() (uint32, error) {
+// GetBlockHeight retrieves the block height for a specific block hash
+func (d *SQLDatabase) GetBlockHeight(hash string) (uint32, error) {
 	var height uint32
 	err := d.db.QueryRow(`
-		SELECT COALESCE(MAX(height), 0)
+		SELECT height
 		FROM blocks
-	`).Scan(&height)
+		WHERE hash = $1
+	`, hash).Scan(&height)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, fmt.Errorf("block not found: %s", hash)
+		}
 		return 0, fmt.Errorf("error getting block height: %v", err)
 	}
 	return height, nil
