@@ -73,12 +73,13 @@ type OutPoint struct {
 
 // SPVNode represents a Simplified Payment Verification node
 type SPVNode struct {
+	conn           net.Conn
 	headers        map[uint32]BlockHeader
-	currentHeight  uint32
+	blocks         map[string]*Block
 	peers          []string
 	watchAddresses map[string]bool
 	bloomFilter    []byte
-	conn           net.Conn
+	currentHeight  uint32
 	verackReceived chan struct{}
 }
 

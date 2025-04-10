@@ -44,6 +44,7 @@ func NewSPVNode(peers []string) *SPVNode {
 	log.Printf("Initializing SPV node with %d peers", len(peers))
 	return &SPVNode{
 		headers:        make(map[uint32]BlockHeader),
+		blocks:         make(map[string]*Block),
 		peers:          peers,
 		watchAddresses: make(map[string]bool),
 		bloomFilter:    make([]byte, 256),
@@ -574,7 +575,28 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 
 // handleBlockMessage handles a block message
 func (n *SPVNode) handleBlockMessage(payload []byte) error {
-	// Parse and process block
+	// Parse block message
+	block, err := n.parseBlockMessage(payload)
+	if err != nil {
+		return fmt.Errorf("error parsing block message: %v", err)
+	}
+
+	// Calculate block hash
+	headerBytes := block.Header.Serialize()
+	hash1 := sha256.Sum256(headerBytes)
+	hash2 := sha256.Sum256(hash1[:])
+	blockHash := hex.EncodeToString(hash2[:])
+
+	// Store block
+	n.blocks[blockHash] = block
+
+	// Process transactions
+	for _, tx := range block.Tx {
+		if n.ProcessTransaction(&tx) {
+			log.Printf("Found relevant transaction: %s", tx.TxID)
+		}
+	}
+
 	return nil
 }
 
