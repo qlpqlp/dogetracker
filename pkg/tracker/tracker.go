@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/dogeorg/doge"
@@ -159,10 +160,43 @@ func (c *DogeTracker) followTheChain(nextBlockHash string) (lastProcessed string
 			// Check if this is an AuxPow block
 			isAuxPow := head.Version >= 0x20000000
 			if isAuxPow {
-				log.Printf("Block %d is an AuxPow block, adjusting decoding", head.Height)
-				// For AuxPow blocks, we need to adjust the block data
-				// Skip the AuxPow data and only decode the actual block
-				blockData = blockData[:80] // Keep only the block header
+				log.Printf("Block %d is an AuxPow block, skipping AuxPow data", head.Height)
+				// For AuxPow blocks, we'll create a block with just the header
+				// and skip the AuxPow data
+				prevBlock, err := doge.HexDecode(head.PreviousBlockHash)
+				if err != nil {
+					log.Printf("Error decoding previous block hash: %v", err)
+					continue
+				}
+				merkleRoot, err := doge.HexDecode(head.MerkleRoot)
+				if err != nil {
+					log.Printf("Error decoding merkle root: %v", err)
+					continue
+				}
+				bits, err := strconv.ParseUint(head.Bits, 16, 32)
+				if err != nil {
+					log.Printf("Error parsing bits: %v", err)
+					continue
+				}
+
+				block := &ChainBlock{
+					Hash:   head.Hash,
+					Height: head.Height,
+					Block: doge.Block{
+						Header: doge.BlockHeader{
+							Version:    head.Version,
+							PrevBlock:  prevBlock,
+							MerkleRoot: merkleRoot,
+							Timestamp:  uint32(head.Time),
+							Bits:       uint32(bits),
+							Nonce:      head.Nonce,
+						},
+					},
+				}
+				c.output <- BlockOrUndo{Block: block}
+				lastProcessed = block.Hash
+				nextBlockHash = head.NextBlockHash
+				continue
 			}
 
 			block := &ChainBlock{

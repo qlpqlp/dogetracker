@@ -99,6 +99,66 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 	isAuxPow := block.Block.Header.Version >= 0x20000000
 	if isAuxPow {
 		log.Printf("Block %d is an AuxPow block, only processing coinbase transaction", block.Height)
+		// For AuxPow blocks, we only process the coinbase transaction
+		if len(block.Block.Tx) > 0 {
+			tx := block.Block.Tx[0] // Get the coinbase transaction
+			// Process outputs (incoming transactions)
+			for _, vout := range tx.VOut {
+				// Extract address from script
+				scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
+				if scriptType == "" {
+					continue
+				}
+				if addrInfo, exists := trackedAddrs[string(addr)]; exists {
+					// Found a tracked address in the output
+					amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
+
+					// Insert transaction into database
+					_, err := db.Exec(`
+						INSERT INTO transactions (
+							address_id, tx_id, block_hash, block_height,
+							amount, fee, timestamp, is_incoming,
+							confirmations, status, sender_address, receiver_address,
+							created_at
+						) VALUES (
+							$1, $2, $3, $4,
+							$5, $6, $7, $8,
+							$9, $10, $11, $12,
+							NOW()
+						)
+					`,
+						addrInfo.id,
+						tx.TxID,
+						block.Hash,
+						block.Height,
+						amount,
+						0, // No fee for coinbase transactions
+						block.Block.Header.Timestamp,
+						true, // Coinbase transactions are always incoming
+						1,    // Start with 1 confirmation
+						"confirmed",
+						"coinbase",
+						string(addr),
+					)
+					if err != nil {
+						log.Printf("Error inserting transaction: %v", err)
+						continue
+					}
+
+					// Update address balance
+					_, err = db.Exec(`
+						UPDATE tracked_addresses
+						SET balance = balance + $1,
+							updated_at = NOW()
+						WHERE id = $2
+					`, amount, addrInfo.id)
+					if err != nil {
+						log.Printf("Error updating balance: %v", err)
+					}
+				}
+			}
+		}
+		return nil // Skip processing other transactions for AuxPow blocks
 	}
 
 	// Process each transaction in the block
