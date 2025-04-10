@@ -25,7 +25,8 @@ func DecodeBlock(data []byte) (*Block, error) {
 	offset += 4
 
 	// Log block version and type
-	isAuxPow := block.Header.Version >= 0x20000000
+	// Note: The version is stored in little-endian format, so we need to check the actual value
+	isAuxPow := (block.Header.Version & 0x20000000) != 0
 	log.Printf("Block version: %x (is AuxPow: %v)", block.Header.Version, isAuxPow)
 
 	block.Header.PrevBlock = make([]byte, 32)
