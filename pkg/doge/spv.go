@@ -212,35 +212,181 @@ func (n *SPVNode) sendMessage(command string, payload []byte) error {
 
 // sendVersionMessage sends a version message
 func (n *SPVNode) sendVersionMessage() error {
+	// Create version message payload
 	payload := make([]byte, 86) // Version message size
 	binary.LittleEndian.PutUint32(payload[0:4], ProtocolVersion)
-	// Set other fields...
+
+	// Services (8 bytes) - NODE_NETWORK
+	binary.LittleEndian.PutUint64(payload[4:12], 1)
+
+	// Timestamp (8 bytes)
+	binary.LittleEndian.PutUint64(payload[12:20], uint64(time.Now().Unix()))
+
+	// Receiver services (8 bytes)
+	binary.LittleEndian.PutUint64(payload[20:28], 1)
+
+	// Receiver IP (16 bytes) - IPv4 mapped to IPv6
+	payload[28] = 0x00
+	payload[29] = 0x00
+	payload[30] = 0x00
+	payload[31] = 0x00
+	payload[32] = 0x00
+	payload[33] = 0x00
+	payload[34] = 0x00
+	payload[35] = 0x00
+	payload[36] = 0x00
+	payload[37] = 0x00
+	payload[38] = 0xFF
+	payload[39] = 0xFF
+	payload[40] = 0x00
+	payload[41] = 0x00
+	payload[42] = 0x00
+	payload[43] = 0x00
+
+	// Receiver port (2 bytes)
+	binary.BigEndian.PutUint16(payload[44:46], 22556)
+
+	// Sender services (8 bytes)
+	binary.LittleEndian.PutUint64(payload[46:54], 1)
+
+	// Sender IP (16 bytes) - IPv4 mapped to IPv6
+	payload[54] = 0x00
+	payload[55] = 0x00
+	payload[56] = 0x00
+	payload[57] = 0x00
+	payload[58] = 0x00
+	payload[59] = 0x00
+	payload[60] = 0x00
+	payload[61] = 0x00
+	payload[62] = 0x00
+	payload[63] = 0x00
+	payload[64] = 0xFF
+	payload[65] = 0xFF
+	payload[66] = 0x00
+	payload[67] = 0x00
+	payload[68] = 0x00
+	payload[69] = 0x00
+
+	// Sender port (2 bytes)
+	binary.BigEndian.PutUint16(payload[70:72], 22556)
+
+	// Nonce (8 bytes)
+	binary.LittleEndian.PutUint64(payload[72:80], uint64(time.Now().UnixNano()))
+
+	// User agent length (varint)
+	payload[80] = 0x00
+
+	// Start height (4 bytes)
+	binary.LittleEndian.PutUint32(payload[82:86], 0)
+
 	return n.sendMessage(MsgVersion, payload)
 }
 
 // sendFilterLoadMessage sends a filter load message
 func (n *SPVNode) sendFilterLoadMessage() error {
+	// Create bloom filter
+	n.updateBloomFilter()
+
+	// Create filter load message payload
 	payload := make([]byte, 0)
-	// Add bloom filter data...
+
+	// Filter size (varint)
+	payload = append(payload, byte(len(n.bloomFilter)))
+
+	// Filter data
+	payload = append(payload, n.bloomFilter...)
+
+	// Number of hash functions (4 bytes)
+	binary.LittleEndian.PutUint32(payload[len(payload):len(payload)+4], 11)
+
+	// Tweak (4 bytes)
+	binary.LittleEndian.PutUint32(payload[len(payload):len(payload)+4], uint32(time.Now().UnixNano()))
+
+	// Flags (1 byte)
+	payload = append(payload, 0x01) // BLOOM_UPDATE_ALL
+
 	return n.sendMessage(MsgFilterLoad, payload)
 }
 
 // sendGetHeaders sends a getheaders message
 func (n *SPVNode) sendGetHeaders() error {
+	// Create getheaders message payload
 	payload := make([]byte, 0)
-	// Add block locator hashes...
+
+	// Version (4 bytes)
+	binary.LittleEndian.PutUint32(payload[0:4], ProtocolVersion)
+
+	// Hash count (varint)
+	payload = append(payload, 0x01) // One hash
+
+	// Block locator hashes (32 bytes)
+	payload = append(payload, make([]byte, 32)...) // Genesis block hash
+
+	// Stop hash (32 bytes)
+	payload = append(payload, make([]byte, 32)...) // Zero hash to get all headers
+
 	return n.sendMessage(MsgGetHeaders, payload)
 }
 
 // handleVersionMessage handles a version message
 func (n *SPVNode) handleVersionMessage(payload []byte) error {
+	// Parse version message
+	version := binary.LittleEndian.Uint32(payload[0:4])
+	if version < ProtocolVersion {
+		return fmt.Errorf("peer version %d is too old", version)
+	}
+
 	// Send verack
 	return n.sendMessage(MsgVerack, nil)
 }
 
 // handleHeadersMessage handles a headers message
 func (n *SPVNode) handleHeadersMessage(payload []byte) error {
-	// Parse and store headers
+	// Parse headers count (varint)
+	reader := bytes.NewReader(payload)
+	count, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return err
+	}
+
+	// Parse each header
+	for i := uint64(0); i < count; i++ {
+		header := BlockHeader{}
+
+		// Version (4 bytes)
+		if err := binary.Read(reader, binary.LittleEndian, &header.Version); err != nil {
+			return err
+		}
+
+		// Previous block hash (32 bytes)
+		if _, err := reader.Read(header.PrevBlock[:]); err != nil {
+			return err
+		}
+
+		// Merkle root (32 bytes)
+		if _, err := reader.Read(header.MerkleRoot[:]); err != nil {
+			return err
+		}
+
+		// Time (4 bytes)
+		if err := binary.Read(reader, binary.LittleEndian, &header.Time); err != nil {
+			return err
+		}
+
+		// Bits (4 bytes)
+		if err := binary.Read(reader, binary.LittleEndian, &header.Bits); err != nil {
+			return err
+		}
+
+		// Nonce (4 bytes)
+		if err := binary.Read(reader, binary.LittleEndian, &header.Nonce); err != nil {
+			return err
+		}
+
+		// Store header
+		n.headers[header.Height] = header
+	}
+
 	return nil
 }
 
