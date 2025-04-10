@@ -155,6 +155,16 @@ func (c *DogeTracker) followTheChain(nextBlockHash string) (lastProcessed string
 			// This block is still on-chain.
 			// Output the decoded block.
 			blockData := c.fetchBlockData(head.Hash)
+
+			// Check if this is an AuxPow block
+			isAuxPow := head.Version >= 0x20000000
+			if isAuxPow {
+				log.Printf("Block %d is an AuxPow block, adjusting decoding", head.Height)
+				// For AuxPow blocks, we need to adjust the block data
+				// Skip the AuxPow data and only decode the actual block
+				blockData = blockData[:80] // Keep only the block header
+			}
+
 			block := &ChainBlock{
 				Hash:   head.Hash,
 				Height: head.Height,
