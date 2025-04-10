@@ -142,10 +142,124 @@ func (n *SPVNode) handleMessages() {
 			if err := n.handlePingMessage(msg.Payload); err != nil {
 				log.Printf("Error handling ping message: %v", err)
 			}
+		case "sendheaders":
+			// Acknowledge sendheaders message
+			log.Printf("Received sendheaders message, sending verack")
+			if err := n.sendMessage(MsgVerack, nil); err != nil {
+				log.Printf("Error sending verack: %v", err)
+			}
+		case "sendcmpct":
+			// Acknowledge sendcmpct message
+			log.Printf("Received sendcmpct message, sending verack")
+			if err := n.sendMessage(MsgVerack, nil); err != nil {
+				log.Printf("Error sending verack: %v", err)
+			}
+		case "getheaders":
+			// Handle getheaders message from peer
+			log.Printf("Received getheaders message, sending headers")
+			if err := n.handleGetHeadersMessage(msg.Payload); err != nil {
+				log.Printf("Error handling getheaders message: %v", err)
+			}
+		case "feefilter":
+			// Acknowledge feefilter message
+			log.Printf("Received feefilter message, sending verack")
+			if err := n.sendMessage(MsgVerack, nil); err != nil {
+				log.Printf("Error sending verack: %v", err)
+			}
 		default:
 			log.Printf("Ignoring unknown message type: %s", command)
 		}
 	}
+}
+
+// handleGetHeadersMessage handles a getheaders message from the peer
+func (n *SPVNode) handleGetHeadersMessage(payload []byte) error {
+	// Parse getheaders message
+	reader := bytes.NewReader(payload)
+
+	// Version (4 bytes)
+	var version uint32
+	if err := binary.Read(reader, binary.LittleEndian, &version); err != nil {
+		return fmt.Errorf("error reading version: %v", err)
+	}
+
+	// Hash count (varint)
+	count, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return fmt.Errorf("error reading hash count: %v", err)
+	}
+
+	// Block locator hashes
+	locatorHashes := make([][32]byte, count)
+	for i := uint64(0); i < count; i++ {
+		if _, err := reader.Read(locatorHashes[i][:]); err != nil {
+			return fmt.Errorf("error reading locator hash: %v", err)
+		}
+	}
+
+	// Stop hash (32 bytes)
+	var stopHash [32]byte
+	if _, err := reader.Read(stopHash[:]); err != nil {
+		return fmt.Errorf("error reading stop hash: %v", err)
+	}
+
+	// Find headers to send
+	var headers []BlockHeader
+	for _, hash := range locatorHashes {
+		for _, header := range n.headers {
+			if bytes.Equal(header.PrevBlock[:], hash[:]) {
+				headers = append(headers, header)
+			}
+		}
+	}
+
+	// Send headers message
+	return n.sendHeadersMessage(headers)
+}
+
+// sendHeadersMessage sends a headers message
+func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
+	// Create headers message payload
+	payload := make([]byte, 0)
+
+	// Headers count (varint)
+	countBytes := make([]byte, binary.MaxVarintLen64)
+	bytesWritten := binary.PutUvarint(countBytes, uint64(len(headers)))
+	payload = append(payload, countBytes[:bytesWritten]...)
+
+	// Each header
+	for _, header := range headers {
+		// Version (4 bytes)
+		versionBytes := make([]byte, 4)
+		binary.LittleEndian.PutUint32(versionBytes, uint32(header.Version))
+		payload = append(payload, versionBytes...)
+
+		// Previous block hash (32 bytes)
+		payload = append(payload, header.PrevBlock[:]...)
+
+		// Merkle root (32 bytes)
+		payload = append(payload, header.MerkleRoot[:]...)
+
+		// Time (4 bytes)
+		timeBytes := make([]byte, 4)
+		binary.LittleEndian.PutUint32(timeBytes, header.Time)
+		payload = append(payload, timeBytes...)
+
+		// Bits (4 bytes)
+		bitsBytes := make([]byte, 4)
+		binary.LittleEndian.PutUint32(bitsBytes, header.Bits)
+		payload = append(payload, bitsBytes...)
+
+		// Nonce (4 bytes)
+		nonceBytes := make([]byte, 4)
+		binary.LittleEndian.PutUint32(nonceBytes, header.Nonce)
+		payload = append(payload, nonceBytes...)
+
+		// Transaction count (varint) - always 0 for headers message
+		payload = append(payload, 0x00)
+	}
+
+	return n.sendMessage(MsgHeaders, payload)
 }
 
 // readMessage reads a complete message from the connection
