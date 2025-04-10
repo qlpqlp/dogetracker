@@ -79,7 +79,7 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 		"seed.dogecoin.com:22556",  // Mainnet seed node
 		"seed.multidoge.org:22556", // Mainnet seed node
 	}
-	spvNode := doge.NewSPVNode(peers)
+	spvNode := doge.NewSPVNode(peers, 0, doge.NewSQLDatabase(db))
 
 	// Add tracked addresses to SPV node
 	for addr := range trackedAddresses {
@@ -237,7 +237,7 @@ func main() {
 
 	// Create SPV node with specified peer and start block
 	peers := []string{nodeAddr}
-	spvNode := doge.NewSPVNode(peers, uint32(startBlock), db)
+	spvNode := doge.NewSPVNode(peers, uint32(startBlock), doge.NewSQLDatabase(db))
 
 	log.Printf("Attempting to connect to Dogecoin node at %s...", nodeAddr)
 	log.Printf("Starting from block height %d", startBlock)
