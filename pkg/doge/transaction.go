@@ -157,6 +157,51 @@ func DecodeTransaction(data []byte) (*Transaction, error) {
 	return tx, nil
 }
 
+// SerializeSize returns the number of bytes it would take to serialize the transaction
+func (tx *Transaction) SerializeSize() int {
+	size := 4 // Version
+
+	// Input count
+	size += VarIntSerializeSize(uint64(len(tx.VIn)))
+
+	// Inputs
+	for _, input := range tx.VIn {
+		size += 32 // Previous output hash
+		size += 4  // Previous output index
+		size += VarIntSerializeSize(uint64(len(input.Script)))
+		size += len(input.Script)
+		size += 4 // Sequence
+	}
+
+	// Output count
+	size += VarIntSerializeSize(uint64(len(tx.VOut)))
+
+	// Outputs
+	for _, output := range tx.VOut {
+		size += 8 // Value
+		size += VarIntSerializeSize(uint64(len(output.Script)))
+		size += len(output.Script)
+	}
+
+	size += 4 // Lock time
+
+	return size
+}
+
+// VarIntSerializeSize returns the number of bytes it would take to serialize a variable length integer
+func VarIntSerializeSize(val uint64) int {
+	if val < 0xfd {
+		return 1
+	}
+	if val <= 0xffff {
+		return 3
+	}
+	if val <= 0xffffffff {
+		return 5
+	}
+	return 9
+}
+
 // Errors
 var (
 	ErrInvalidTransaction = errors.New("invalid transaction data")

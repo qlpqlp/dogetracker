@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/dogeorg/doge"
+	"github.com/qlpqlp/dogetracker/pkg/doge"
 	"github.com/qlpqlp/dogetracker/pkg/spec"
 )
 
@@ -60,29 +60,6 @@ type DogeTracker struct {
 	stop           <-chan struct{} // ctx.Done() channel.
 	stopping       bool            // set to exit the main loop.
 	fullUndoBlocks bool            // fully decode blocks in UndoForkBlocks
-}
-
-// Transaction represents a Dogecoin transaction
-type Transaction struct {
-	Version  uint32
-	VIn      []TxIn
-	VOut     []TxOut
-	LockTime uint32
-	TxID     string
-}
-
-// TxIn represents a transaction input
-type TxIn struct {
-	TxID     []byte
-	VOut     uint32
-	Script   []byte
-	Sequence uint32
-}
-
-// TxOut represents a transaction output
-type TxOut struct {
-	Value  int64
-	Script []byte
 }
 
 /*
