@@ -806,8 +806,8 @@ func parseTransaction(payload []byte) (Transaction, int, error) {
 		if len(payload[offset:]) < int(scriptLen) {
 			return Transaction{}, 0, fmt.Errorf("script for input %d too short", i)
 		}
-		input.Script = make([]byte, scriptLen)
-		copy(input.Script, payload[offset:offset+int(scriptLen)])
+		input.ScriptSig = make([]byte, scriptLen)
+		copy(input.ScriptSig, payload[offset:offset+int(scriptLen)])
 		offset += int(scriptLen)
 
 		// Parse sequence
@@ -850,8 +850,8 @@ func parseTransaction(payload []byte) (Transaction, int, error) {
 		if len(payload[offset:]) < int(scriptLen) {
 			return Transaction{}, 0, fmt.Errorf("script for output %d too short", i)
 		}
-		output.Script = make([]byte, scriptLen)
-		copy(output.Script, payload[offset:offset+int(scriptLen)])
+		output.ScriptPubKey = make([]byte, scriptLen)
+		copy(output.ScriptPubKey, payload[offset:offset+int(scriptLen)])
 		offset += int(scriptLen)
 
 		tx.Outputs[i] = output
@@ -864,6 +864,11 @@ func parseTransaction(payload []byte) (Transaction, int, error) {
 	tx.LockTime = binary.LittleEndian.Uint32(payload[offset : offset+4])
 	offset += 4
 
+	// Calculate TxID (double SHA-256 of the serialized transaction)
+	hash1 := sha256.Sum256(payload[:offset])
+	hash2 := sha256.Sum256(hash1[:])
+	tx.TxID = hex.EncodeToString(hash2[:])
+
 	return tx, offset, nil
 }
 
@@ -871,7 +876,7 @@ func parseTransaction(payload []byte) (Transaction, int, error) {
 func (n *SPVNode) isRelevant(tx Transaction) bool {
 	// Check if any of our watch addresses are in the transaction
 	for _, output := range tx.Outputs {
-		scriptHash := sha256.Sum256(output.Script)
+		scriptHash := sha256.Sum256(output.ScriptPubKey)
 		if n.bloomFilter != nil {
 			// Check if the script hash matches our bloom filter
 			if bytes.Contains(n.bloomFilter, scriptHash[:]) {
@@ -1148,7 +1153,7 @@ func (n *SPVNode) ProcessTransaction(tx *Transaction) bool {
 	n.logger.Printf("Processing transaction")
 	for _, output := range tx.Outputs {
 		// Extract addresses from output script
-		addresses := extractAddressesFromScript(output.Script)
+		addresses := extractAddressesFromScript(output.ScriptPubKey)
 		for _, addr := range addresses {
 			if n.watchAddresses[addr] {
 				n.logger.Printf("Found relevant transaction for watched address %s", addr)

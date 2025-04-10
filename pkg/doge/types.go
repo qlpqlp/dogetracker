@@ -46,6 +46,7 @@ type BlockchainBlock struct {
 // Transaction represents a Dogecoin transaction
 type Transaction struct {
 	Version  int32
+	TxID     string
 	Inputs   []TxInput
 	Outputs  []TxOutput
 	LockTime uint32
@@ -54,14 +55,14 @@ type Transaction struct {
 // TxInput represents a transaction input
 type TxInput struct {
 	PreviousOutput OutPoint
-	Script         []byte
+	ScriptSig      []byte
 	Sequence       uint32
 }
 
 // TxOutput represents a transaction output
 type TxOutput struct {
-	Value  uint64
-	Script []byte
+	Value        uint64
+	ScriptPubKey []byte
 }
 
 // OutPoint represents a reference to a previous transaction output
