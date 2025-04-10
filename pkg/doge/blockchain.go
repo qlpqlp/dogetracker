@@ -15,6 +15,25 @@ type BlockchainBlock struct {
 	Time   int64
 }
 
+// Blockchain represents a connection to a Dogecoin node
+type Blockchain interface {
+	GetBlockHash(height int64) (string, error)
+	GetBlock(hash string) ([]byte, error)
+	GetBlockCount() (int64, error)
+}
+
+// NewSPVNode creates a new SPV node
+func NewSPVNode() *SPVNode {
+	return &SPVNode{
+		peers: []string{
+			"seed.dogecoin.com:22556",
+			"seed.multidoge.org:22556",
+			"seed.dogechain.info:22556",
+		},
+		watchAddresses: make(map[string]bool),
+	}
+}
+
 // GetBlock gets block data using RPC
 func GetBlock(blockHash string) (map[string]interface{}, error) {
 	// Make RPC call to get block data
@@ -100,8 +119,8 @@ func GetBlockTransactions(blockHash string) ([]*Transaction, error) {
 
 		// Create transaction object
 		tx := &Transaction{
-			TxID: txIDStr,
-			VOut: make([]TxOut, 0),
+			TxID:    txIDStr,
+			Outputs: make([]TxOutput, 0),
 		}
 
 		// Get transaction outputs
@@ -143,13 +162,9 @@ func GetBlockTransactions(blockHash string) ([]*Transaction, error) {
 			}
 
 			// Add output to transaction
-			tx.VOut = append(tx.VOut, TxOut{
-				Value: int64(value * 1e8), // Convert DOGE to satoshis
-				ScriptPubKey: struct {
-					Addresses []string
-				}{
-					Addresses: addrStrings,
-				},
+			tx.Outputs = append(tx.Outputs, TxOutput{
+				Value:     int64(value * 1e8), // Convert DOGE to satoshis
+				Addresses: addrStrings,
 			})
 		}
 

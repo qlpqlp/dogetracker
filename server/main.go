@@ -72,8 +72,26 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 	// Get block hash
 	blockHash := block.Hash
 
-	// Get block transactions using RPC
-	txs, err := doge.GetBlockTransactions(blockHash)
+	// Create SPV node
+	spvNode := doge.NewSPVNode()
+
+	// Add tracked addresses to SPV node
+	for addr := range trackedAddresses {
+		spvNode.AddWatchAddress(addr)
+	}
+
+	// Connect to a peer
+	for _, peer := range spvNode.peers {
+		if err := spvNode.ConnectToPeer(peer); err != nil {
+			log.Printf("Failed to connect to %s: %v", peer, err)
+			continue
+		}
+		log.Printf("Connected to %s", peer)
+		break
+	}
+
+	// Get block transactions using SPV
+	txs, err := spvNode.GetBlockTransactions(blockHash)
 	if err != nil {
 		return fmt.Errorf("error getting block transactions: %v", err)
 	}
@@ -85,25 +103,20 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 		log.Printf("Processing transaction %d/%d: %s", i+1, len(txs), tx.TxID)
 
 		// Check if any of the tracked addresses are involved in this transaction
-		for _, vout := range tx.VOut {
-			if vout.ScriptPubKey.Addresses != nil {
-				for _, addr := range vout.ScriptPubKey.Addresses {
-					if trackedAddresses[addr] {
-						// Found a transaction involving a tracked address
-						log.Printf("Found transaction involving tracked address %s", addr)
+		relevantAddresses := spvNode.ProcessTransaction(tx)
+		for _, addr := range relevantAddresses {
+			// Found a transaction involving a tracked address
+			log.Printf("Found transaction involving tracked address %s", addr)
 
-						// Store transaction in database
-						_, err := db.Exec(`
-							INSERT INTO transactions (txid, block_hash, block_height, address, amount, timestamp)
-							VALUES ($1, $2, $3, $4, $5, $6)
-							ON CONFLICT (txid, address) DO NOTHING
-						`, tx.TxID, blockHash, block.Height, addr, vout.Value, block.Time)
+			// Store transaction in database
+			_, err := db.Exec(`
+				INSERT INTO transactions (txid, block_hash, block_height, address, amount, timestamp)
+				VALUES ($1, $2, $3, $4, $5, $6)
+				ON CONFLICT (txid, address) DO NOTHING
+			`, tx.TxID, blockHash, block.Height, addr, tx.Outputs[0].Value, block.Time)
 
-						if err != nil {
-							return fmt.Errorf("error storing transaction: %v", err)
-						}
-					}
-				}
+			if err != nil {
+				return fmt.Errorf("error storing transaction: %v", err)
 			}
 		}
 	}
