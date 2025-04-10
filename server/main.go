@@ -240,15 +240,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create SPV node with default peers
+	// Create SPV node with qlpqlp.ddns.net as peer
 	peers := []string{
-		"seed.dogecoin.net:22556",  // Mainnet seed node
-		"seed.dogecoin.com:22556",  // Mainnet seed node
-		"seed.multidoge.org:22556", // Mainnet seed node
+		"qlpqlp.ddns.net:22556", // Custom node
 	}
 	spvNode := doge.NewSPVNode(peers)
 
-	// Connect to a peer
+	// Connect to peer
 	if err := spvNode.ConnectToPeer(peers[0]); err != nil {
 		log.Fatalf("Failed to connect to peer: %v", err)
 	}
