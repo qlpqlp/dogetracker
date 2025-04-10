@@ -146,6 +146,11 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, doge.HexEncodeReversed(vin.TxID), len(prevTx.VOut))
 					continue
 				}
+				// Additional safety check for script length
+				if len(prevTx.VOut[vin.VOut].Script) == 0 {
+					log.Printf("Warning: Empty script in previous transaction %s output %d", doge.HexEncodeReversed(vin.TxID), vin.VOut)
+					continue
+				}
 				// Extract address from script
 				scriptType, addr := doge.ClassifyScript(prevTx.VOut[vin.VOut].Script, &doge.DogeMainNetChain)
 				if scriptType == "" {
