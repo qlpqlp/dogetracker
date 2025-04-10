@@ -416,6 +416,10 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		// Transaction count (varint) - should be 0 for headers message
 		txCount, err := binary.ReadUvarint(reader)
 		if err != nil {
+			if err == io.EOF && i == count-1 {
+				// EOF at the end of the last header is expected
+				break
+			}
 			return fmt.Errorf("error reading transaction count: %v", err)
 		}
 		if txCount != 0 {
