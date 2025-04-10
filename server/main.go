@@ -18,11 +18,12 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync"
 	"syscall"
+	"time"
 
-	"github.com/dogeorg/doge"
 	_ "github.com/lib/pq"
+	"github.com/qlpqlp/dogetracker/pkg/api"
+	"github.com/qlpqlp/dogetracker/pkg/doge"
 	"github.com/qlpqlp/dogetracker/pkg/tracker"
 	serverdb "github.com/qlpqlp/dogetracker/server/db"
 )
@@ -84,8 +85,13 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 	// Get block hash
 	blockHash := block.Hash
 
-	// Create SPV node
-	spvNode := doge.NewSPVNode()
+	// Create SPV node with default peers
+	peers := []string{
+		"seed.dogecoin.net:22556",  // Mainnet seed node
+		"seed.dogecoin.com:22556",  // Mainnet seed node
+		"seed.multidoge.org:22556", // Mainnet seed node
+	}
+	spvNode := doge.NewSPVNode(peers)
 
 	// Add tracked addresses to SPV node
 	for addr := range trackedAddresses {
@@ -93,7 +99,7 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 	}
 
 	// Connect to a peer
-	for _, peer := range spvNode.peers {
+	for _, peer := range peers {
 		if err := spvNode.ConnectToPeer(peer); err != nil {
 			log.Printf("Failed to connect to %s: %v", peer, err)
 			continue
@@ -115,17 +121,16 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 		log.Printf("Processing transaction %d/%d: %s", i+1, len(txs), tx.TxID)
 
 		// Check if any of the tracked addresses are involved in this transaction
-		relevantAddresses := spvNode.ProcessTransaction(tx)
-		for _, addr := range relevantAddresses {
+		if spvNode.ProcessTransaction(&tx) {
 			// Found a transaction involving a tracked address
-			log.Printf("Found transaction involving tracked address %s", addr)
+			log.Printf("Found transaction involving tracked address")
 
 			// Store transaction in database
 			_, err := db.Exec(`
 				INSERT INTO transactions (txid, block_hash, block_height, address, amount, timestamp)
 				VALUES ($1, $2, $3, $4, $5, $6)
 				ON CONFLICT (txid, address) DO NOTHING
-			`, tx.TxID, blockHash, block.Height, addr, tx.Outputs[0].Value, block.Time)
+			`, tx.TxID, blockHash, block.Height, "", tx.Outputs[0].Value, block.Time)
 
 			if err != nil {
 				return fmt.Errorf("error storing transaction: %v", err)
@@ -231,11 +236,20 @@ func HandleChainReorganization(db *sql.DB, undo *tracker.UndoForkBlocks) error {
 func main() {
 	flag.Parse()
 
-	// Create SPV node
-	spvNode := doge.NewSPVNode()
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create SPV node with default peers
+	peers := []string{
+		"seed.dogecoin.net:22556",  // Mainnet seed node
+		"seed.dogecoin.com:22556",  // Mainnet seed node
+		"seed.multidoge.org:22556", // Mainnet seed node
+	}
+	spvNode := doge.NewSPVNode(peers)
 
 	// Connect to a peer
-	if err := spvNode.ConnectToPeer(spvNode.peers[0]); err != nil {
+	if err := spvNode.ConnectToPeer(peers[0]); err != nil {
 		log.Fatalf("Failed to connect to peer: %v", err)
 	}
 
@@ -249,27 +263,42 @@ func main() {
 	// Create tracker
 	t := tracker.NewTracker(db, spvNode)
 
-	// Start block processing
-	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := t.ProcessBlocks(ctx, startBlock); err != nil {
-			log.Printf("Error processing blocks: %v", err)
-		}
-	}()
-
-	// Start API server
-	api := tracker.NewAPI(t, apiToken)
+	// Create API server
+	api := api.NewAPI(db, t, apiPort, apiToken)
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", apiPort),
 		Handler: api,
 	}
 
+	// Start block processing
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Get current block height
+				height, err := spvNode.GetBlockCount()
+				if err != nil {
+					log.Printf("Error getting block height: %v", err)
+					time.Sleep(10 * time.Second)
+					continue
+				}
+
+				// Process new blocks
+				if err := t.ProcessBlocks(ctx, height); err != nil {
+					log.Printf("Error processing blocks: %v", err)
+				}
+
+				time.Sleep(10 * time.Second)
+			}
+		}
+	}()
+
+	// Start API server
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start API server: %v", err)
+			log.Fatalf("Error starting API server: %v", err)
 		}
 	}()
 
@@ -278,11 +307,15 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	// Shutdown
-	log.Println("Shutting down...")
+	// Shutdown server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	// Cancel the processing context
 	cancel()
-	if err := server.Shutdown(context.Background()); err != nil {
+
+	// Shutdown server
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Error shutting down server: %v", err)
 	}
-	wg.Wait()
 }

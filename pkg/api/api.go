@@ -26,8 +26,19 @@ func NewAPI(db *sql.DB, tracker *tracker.Tracker, port int, token string) *API {
 	}
 }
 
+// ServeHTTP implements http.Handler
+func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Verify API token
+	if token := r.Header.Get("X-API-Token"); token != a.token {
+		http.Error(w, "Invalid API token", http.StatusUnauthorized)
+		return
+	}
+
+	// TODO: Implement API endpoints
+	http.Error(w, "Not implemented", http.StatusNotImplemented)
+}
+
 // Start starts the API server
 func (a *API) Start() error {
-	// TODO: Implement API server
-	return http.ListenAndServe(fmt.Sprintf(":%d", a.port), nil)
+	return http.ListenAndServe(fmt.Sprintf(":%d", a.port), a)
 }
