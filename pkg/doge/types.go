@@ -2,6 +2,7 @@ package doge
 
 import (
 	"encoding/binary"
+	"log"
 	"net"
 )
 
@@ -13,7 +14,7 @@ type Block struct {
 
 // BlockHeader represents a Dogecoin block header
 type BlockHeader struct {
-	Version       int32
+	Version       uint32
 	PrevBlock     [32]byte
 	MerkleRoot    [32]byte
 	Time          uint32
@@ -44,8 +45,7 @@ type BlockchainBlock struct {
 
 // Transaction represents a Dogecoin transaction
 type Transaction struct {
-	TxID     string
-	Version  uint32
+	Version  int32
 	Inputs   []TxInput
 	Outputs  []TxOutput
 	LockTime uint32
@@ -54,18 +54,17 @@ type Transaction struct {
 // TxInput represents a transaction input
 type TxInput struct {
 	PreviousOutput OutPoint
-	ScriptSig      []byte
+	Script         []byte
 	Sequence       uint32
 }
 
 // TxOutput represents a transaction output
 type TxOutput struct {
-	Value        int64
-	ScriptPubKey []byte
-	Addresses    []string
+	Value  uint64
+	Script []byte
 }
 
-// OutPoint represents a reference to a previous output
+// OutPoint represents a reference to a previous transaction output
 type OutPoint struct {
 	Hash  [32]byte
 	Index uint32
@@ -82,6 +81,7 @@ type SPVNode struct {
 	currentHeight  uint32
 	verackReceived chan struct{}
 	db             Database
+	logger         *log.Logger
 }
 
 // Database interface for storing blocks and transactions

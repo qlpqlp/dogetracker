@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"time"
 )
 
@@ -54,6 +55,7 @@ func NewSPVNode(peers []string, startHeight uint32, db Database) *SPVNode {
 		currentHeight:  startHeight,
 		verackReceived: make(chan struct{}),
 		db:             db,
+		logger:         log.New(os.Stdout, "SPV: ", log.LstdFlags),
 	}
 }
 
@@ -665,7 +667,7 @@ func (n *SPVNode) handleBlockMessage(payload []byte) error {
 	// Process transactions
 	for _, tx := range block.Tx {
 		if n.ProcessTransaction(&tx) {
-			log.Printf("Found relevant transaction: %s", tx.TxID)
+			log.Printf("Found relevant transaction")
 			// Store transaction in database
 			if err := n.db.StoreTransaction(&tx, blockHash, block.Header.Height); err != nil {
 				log.Printf("Error storing transaction in database: %v", err)
@@ -761,254 +763,255 @@ func (n *SPVNode) GetBlockCount() (int64, error) {
 	return int64(maxHeight), nil
 }
 
-// GetBlockTransactions returns transactions in a block
-func (n *SPVNode) GetBlockTransactions(blockHash string) ([]Transaction, error) {
-	if n.conn == nil {
-		return nil, fmt.Errorf("not connected to peer")
+// parseTransaction parses a transaction from the network protocol
+func parseTransaction(payload []byte) (Transaction, int, error) {
+	if len(payload) < 4 {
+		return Transaction{}, 0, fmt.Errorf("transaction message too short")
 	}
 
-	log.Printf("Requesting transactions for block %s", blockHash)
+	tx := Transaction{
+		Version: int32(binary.LittleEndian.Uint32(payload[0:4])),
+	}
+
+	// Parse input count
+	inputCount, n := binary.Uvarint(payload[4:])
+	if n <= 0 {
+		return Transaction{}, 0, fmt.Errorf("failed to parse input count")
+	}
+	offset := 4 + n
+
+	// Parse inputs
+	tx.Inputs = make([]TxInput, inputCount)
+	for i := uint64(0); i < inputCount; i++ {
+		if len(payload[offset:]) < 36 {
+			return Transaction{}, 0, fmt.Errorf("input %d too short", i)
+		}
+
+		input := TxInput{
+			PreviousOutput: OutPoint{
+				Hash:  [32]byte{},
+				Index: binary.LittleEndian.Uint32(payload[offset+32 : offset+36]),
+			},
+		}
+		copy(input.PreviousOutput.Hash[:], payload[offset:offset+32])
+
+		// Parse script length
+		scriptLen, n := binary.Uvarint(payload[offset+36:])
+		if n <= 0 {
+			return Transaction{}, 0, fmt.Errorf("failed to parse script length for input %d", i)
+		}
+		offset += 36 + n
+
+		// Parse script
+		if len(payload[offset:]) < int(scriptLen) {
+			return Transaction{}, 0, fmt.Errorf("script for input %d too short", i)
+		}
+		input.Script = make([]byte, scriptLen)
+		copy(input.Script, payload[offset:offset+int(scriptLen)])
+		offset += int(scriptLen)
+
+		// Parse sequence
+		if len(payload[offset:]) < 4 {
+			return Transaction{}, 0, fmt.Errorf("sequence for input %d too short", i)
+		}
+		input.Sequence = binary.LittleEndian.Uint32(payload[offset : offset+4])
+		offset += 4
+
+		tx.Inputs[i] = input
+	}
+
+	// Parse output count
+	outputCount, n := binary.Uvarint(payload[offset:])
+	if n <= 0 {
+		return Transaction{}, 0, fmt.Errorf("failed to parse output count")
+	}
+	offset += n
+
+	// Parse outputs
+	tx.Outputs = make([]TxOutput, outputCount)
+	for i := uint64(0); i < outputCount; i++ {
+		if len(payload[offset:]) < 8 {
+			return Transaction{}, 0, fmt.Errorf("output %d too short", i)
+		}
+
+		output := TxOutput{
+			Value: binary.LittleEndian.Uint64(payload[offset : offset+8]),
+		}
+		offset += 8
+
+		// Parse script length
+		scriptLen, n := binary.Uvarint(payload[offset:])
+		if n <= 0 {
+			return Transaction{}, 0, fmt.Errorf("failed to parse script length for output %d", i)
+		}
+		offset += n
+
+		// Parse script
+		if len(payload[offset:]) < int(scriptLen) {
+			return Transaction{}, 0, fmt.Errorf("script for output %d too short", i)
+		}
+		output.Script = make([]byte, scriptLen)
+		copy(output.Script, payload[offset:offset+int(scriptLen)])
+		offset += int(scriptLen)
+
+		tx.Outputs[i] = output
+	}
+
+	// Parse lock time
+	if len(payload[offset:]) < 4 {
+		return Transaction{}, 0, fmt.Errorf("lock time too short")
+	}
+	tx.LockTime = binary.LittleEndian.Uint32(payload[offset : offset+4])
+	offset += 4
+
+	return tx, offset, nil
+}
+
+// isRelevant checks if a transaction is relevant to our watch addresses
+func (n *SPVNode) isRelevant(tx Transaction) bool {
+	// Check if any of our watch addresses are in the transaction
+	for _, output := range tx.Outputs {
+		scriptHash := sha256.Sum256(output.Script)
+		if n.bloomFilter != nil {
+			// Check if the script hash matches our bloom filter
+			if bytes.Contains(n.bloomFilter, scriptHash[:]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// parseBlockMessage parses a block message from the network protocol
+func (n *SPVNode) parseBlockMessage(payload []byte) (*Block, error) {
+	if len(payload) < 80 {
+		return nil, fmt.Errorf("block message too short")
+	}
+
+	block := &Block{
+		Header: BlockHeader{
+			Version:    binary.LittleEndian.Uint32(payload[0:4]),
+			PrevBlock:  [32]byte{},
+			MerkleRoot: [32]byte{},
+			Time:       binary.LittleEndian.Uint32(payload[68:72]),
+			Bits:       binary.LittleEndian.Uint32(payload[72:76]),
+			Nonce:      binary.LittleEndian.Uint32(payload[76:80]),
+		},
+		Tx: make([]Transaction, 0),
+	}
+
+	copy(block.Header.PrevBlock[:], payload[4:36])
+	copy(block.Header.MerkleRoot[:], payload[36:68])
+
+	// Parse transaction count
+	txCount, bytesRead := binary.Uvarint(payload[80:])
+	if bytesRead <= 0 {
+		return nil, fmt.Errorf("failed to parse transaction count")
+	}
+
+	// Parse transactions
+	offset := 80 + bytesRead
+	for i := uint64(0); i < txCount; i++ {
+		tx, bytesRead, err := parseTransaction(payload[offset:])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse transaction %d: %v", i, err)
+		}
+		block.Tx = append(block.Tx, tx)
+		offset += bytesRead
+	}
+
+	return block, nil
+}
+
+// GetBlockTransactions requests and processes transactions for a specific block
+func (n *SPVNode) GetBlockTransactions(blockHash string) ([]Transaction, error) {
+	n.logger.Printf("Requesting transactions for block %s", blockHash)
 
 	// Convert block hash to bytes
 	hashBytes, err := hex.DecodeString(blockHash)
 	if err != nil {
 		return nil, fmt.Errorf("invalid block hash: %v", err)
 	}
-	log.Printf("Converted block hash to bytes: %x", hashBytes)
+	n.logger.Printf("Converted block hash to bytes: %x", hashBytes)
 
-	// Create getdata message for the block
-	payload := make([]byte, 37) // 1 byte for count + 36 bytes for inventory
-	payload[0] = 1              // Count of inventory items
-	payload[1] = 2              // MSG_BLOCK type
-	copy(payload[2:], hashBytes)
-	log.Printf("Created getdata message payload: %x", payload)
+	// Create getdata message payload
+	payload := make([]byte, 0)
+	payload = append(payload, 1) // Number of inventory items
+	payload = append(payload, 2) // Type 2 = block
+	payload = append(payload, hashBytes...)
+	n.logger.Printf("Created getdata message payload: %x", payload)
 
 	// Send getdata message
-	log.Printf("Sending getdata message...")
-	if err := n.sendMessage(MsgGetData, payload); err != nil {
+	n.logger.Println("Sending getdata message...")
+	if err := n.sendMessage("getdata", payload); err != nil {
 		return nil, fmt.Errorf("failed to send getdata message: %v", err)
 	}
-	log.Printf("Getdata message sent successfully")
+	n.logger.Println("Getdata message sent successfully")
 
-	// Create a channel to receive the block message
-	blockChan := make(chan *Block, 1)
-	errChan := make(chan error, 1)
+	// Wait for block message with timeout
+	blockChan := make(chan *Block)
+	errChan := make(chan error)
+	timeout := time.After(30 * time.Second)
 
-	// Start a goroutine to wait for the block message
+	n.logger.Println("Waiting for block or error...")
+	n.logger.Println("Starting goroutine to wait for block message...")
+
 	go func() {
-		log.Printf("Starting goroutine to wait for block message...")
-		// Set a timeout for receiving the block
-		timeout := time.After(30 * time.Second)
-
 		for {
-			select {
-			case <-timeout:
-				log.Printf("Timeout waiting for block message")
-				errChan <- fmt.Errorf("timeout waiting for block message")
+			n.logger.Println("Waiting for next message...")
+			msg, err := n.readMessage()
+			if err != nil {
+				errChan <- fmt.Errorf("failed to read message: %v", err)
 				return
-			default:
-				log.Printf("Waiting for next message...")
-				msg, err := n.readMessage()
+			}
+
+			n.logger.Printf("Received message of type: %s", msg.Command)
+
+			// Check if this is a block message
+			if string(bytes.TrimRight(msg.Command[:], "\x00")) == "block" {
+				n.logger.Println("Received block message, parsing...")
+				block, err := n.parseBlockMessage(msg.Payload)
 				if err != nil {
-					log.Printf("Error reading message: %v", err)
-					errChan <- fmt.Errorf("error reading message: %v", err)
+					errChan <- fmt.Errorf("failed to parse block message: %v", err)
 					return
 				}
 
-				command := string(bytes.TrimRight(msg.Command[:], "\x00"))
-				log.Printf("Received message of type: %s", command)
-
-				if command == MsgBlock {
-					log.Printf("Received block message, parsing...")
-					// Parse block message
-					block, err := n.parseBlockMessage(msg.Payload)
-					if err != nil {
-						log.Printf("Error parsing block message: %v", err)
-						errChan <- fmt.Errorf("error parsing block message: %v", err)
-						return
-					}
-
-					// Verify block hash matches what we requested
-					log.Printf("Verifying block hash...")
-					headerBytes := block.Header.Serialize()
-					hash1 := sha256.Sum256(headerBytes)
-					hash2 := sha256.Sum256(hash1[:])
-					if !bytes.Equal(hash2[:], hashBytes) {
-						log.Printf("Block hash mismatch. Expected: %x, Got: %x", hashBytes, hash2[:])
-						errChan <- fmt.Errorf("received block hash does not match requested hash")
-						return
-					}
-					log.Printf("Block hash verified successfully")
-
-					blockChan <- block
+				// Verify block hash matches
+				headerBytes := block.Header.Serialize()
+				hash1 := sha256.Sum256(headerBytes)
+				hash2 := sha256.Sum256(hash1[:])
+				if !bytes.Equal(hash2[:], hashBytes) {
+					errChan <- fmt.Errorf("received block hash %x does not match requested hash %x", hash2[:], hashBytes)
 					return
-				} else {
-					log.Printf("Ignoring non-block message of type: %s", command)
 				}
+
+				blockChan <- block
+				return
+			} else {
+				n.logger.Printf("Ignoring non-block message of type: %s", msg.Command)
+				// Handle other message types if needed
+				continue
 			}
 		}
 	}()
 
-	// Wait for either the block or an error
-	log.Printf("Waiting for block or error...")
 	select {
 	case block := <-blockChan:
-		log.Printf("Received block, filtering transactions...")
+		n.logger.Printf("Successfully received block with %d transactions", len(block.Tx))
 		// Filter transactions that match our bloom filter
-		var relevantTxs []Transaction
+		relevantTxs := make([]Transaction, 0)
 		for _, tx := range block.Tx {
-			if n.ProcessTransaction(&tx) {
-				log.Printf("Found relevant transaction: %s", tx.TxID)
+			if n.isRelevant(tx) {
 				relevantTxs = append(relevantTxs, tx)
 			}
 		}
-		log.Printf("Found %d relevant transactions", len(relevantTxs))
+		n.logger.Printf("Found %d relevant transactions", len(relevantTxs))
 		return relevantTxs, nil
 	case err := <-errChan:
-		log.Printf("Received error: %v", err)
 		return nil, err
+	case <-timeout:
+		return nil, fmt.Errorf("timeout waiting for block message")
 	}
-}
-
-// parseBlockMessage parses a block message payload into a Block struct
-func (n *SPVNode) parseBlockMessage(payload []byte) (*Block, error) {
-	block := &Block{}
-	reader := bytes.NewReader(payload)
-
-	// Parse block header
-	header := BlockHeader{}
-	if err := binary.Read(reader, binary.LittleEndian, &header.Version); err != nil {
-		return nil, err
-	}
-	if _, err := reader.Read(header.PrevBlock[:]); err != nil {
-		return nil, err
-	}
-	if _, err := reader.Read(header.MerkleRoot[:]); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(reader, binary.LittleEndian, &header.Time); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(reader, binary.LittleEndian, &header.Bits); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(reader, binary.LittleEndian, &header.Nonce); err != nil {
-		return nil, err
-	}
-	block.Header = header
-
-	// Parse transaction count (varint)
-	txCount, err := binary.ReadUvarint(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse transactions
-	block.Tx = make([]Transaction, txCount)
-	for i := uint64(0); i < txCount; i++ {
-		tx, err := n.parseTransaction(reader)
-		if err != nil {
-			return nil, err
-		}
-		block.Tx[i] = *tx
-	}
-
-	return block, nil
-}
-
-// parseTransaction parses a transaction from a reader
-func (n *SPVNode) parseTransaction(reader *bytes.Reader) (*Transaction, error) {
-	tx := &Transaction{}
-
-	// Parse version
-	if err := binary.Read(reader, binary.LittleEndian, &tx.Version); err != nil {
-		return nil, err
-	}
-
-	// Parse input count (varint)
-	inputCount, err := binary.ReadUvarint(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse inputs
-	tx.Inputs = make([]TxInput, inputCount)
-	for i := uint64(0); i < inputCount; i++ {
-		input := TxInput{}
-		if _, err := reader.Read(input.PreviousOutput.Hash[:]); err != nil {
-			return nil, err
-		}
-		if err := binary.Read(reader, binary.LittleEndian, &input.PreviousOutput.Index); err != nil {
-			return nil, err
-		}
-		scriptLen, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return nil, err
-		}
-		input.ScriptSig = make([]byte, scriptLen)
-		if _, err := reader.Read(input.ScriptSig); err != nil {
-			return nil, err
-		}
-		if err := binary.Read(reader, binary.LittleEndian, &input.Sequence); err != nil {
-			return nil, err
-		}
-		tx.Inputs[i] = input
-	}
-
-	// Parse output count (varint)
-	outputCount, err := binary.ReadUvarint(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse outputs
-	tx.Outputs = make([]TxOutput, outputCount)
-	for i := uint64(0); i < outputCount; i++ {
-		output := TxOutput{}
-		if err := binary.Read(reader, binary.LittleEndian, &output.Value); err != nil {
-			return nil, err
-		}
-		scriptLen, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return nil, err
-		}
-		output.ScriptPubKey = make([]byte, scriptLen)
-		if _, err := reader.Read(output.ScriptPubKey); err != nil {
-			return nil, err
-		}
-		tx.Outputs[i] = output
-	}
-
-	// Parse lock time
-	if err := binary.Read(reader, binary.LittleEndian, &tx.LockTime); err != nil {
-		return nil, err
-	}
-
-	// Calculate transaction ID
-	txBytes := make([]byte, reader.Size())
-	reader.Seek(0, io.SeekStart)
-	reader.Read(txBytes)
-	hash1 := sha256.Sum256(txBytes)
-	hash2 := sha256.Sum256(hash1[:])
-	tx.TxID = hex.EncodeToString(hash2[:])
-
-	return tx, nil
-}
-
-// ProcessTransaction checks if a transaction is relevant to our watched addresses
-func (n *SPVNode) ProcessTransaction(tx *Transaction) bool {
-	log.Printf("Processing transaction %s", tx.TxID)
-	for _, output := range tx.Outputs {
-		// Extract addresses from output script
-		addresses := extractAddressesFromScript(output.ScriptPubKey)
-		for _, addr := range addresses {
-			if n.watchAddresses[addr] {
-				log.Printf("Found relevant transaction for watched address %s", addr)
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // Internal functions
@@ -1070,12 +1073,6 @@ func (n *SPVNode) validateChain() error {
 func (n *SPVNode) addressToScriptHash(address string) []byte {
 	// TODO: Implement address to script hash conversion
 	return []byte{}
-}
-
-// isRelevant checks if a script hash matches the bloom filter
-func (n *SPVNode) isRelevant(scriptHash []byte) bool {
-	// TODO: Implement bloom filter checking
-	return false
 }
 
 // extractAddresses extracts addresses from a script
@@ -1144,4 +1141,20 @@ func (n *SPVNode) GetBlockHeader(blockHash string) (*BlockHeader, error) {
 func (n *SPVNode) GetBlockHash(height int64) (string, error) {
 	// TODO: Implement block hash retrieval
 	return "", nil
+}
+
+// ProcessTransaction checks if a transaction is relevant to our watched addresses
+func (n *SPVNode) ProcessTransaction(tx *Transaction) bool {
+	n.logger.Printf("Processing transaction")
+	for _, output := range tx.Outputs {
+		// Extract addresses from output script
+		addresses := extractAddressesFromScript(output.Script)
+		for _, addr := range addresses {
+			if n.watchAddresses[addr] {
+				n.logger.Printf("Found relevant transaction for watched address %s", addr)
+				return true
+			}
+		}
+	}
+	return false
 }
