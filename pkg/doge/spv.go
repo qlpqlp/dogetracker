@@ -26,6 +26,8 @@ const (
 	MsgTx         = "tx"
 	MsgInv        = "inv"
 	MsgFilterLoad = "filterload"
+	MsgPing       = "ping"
+	MsgPong       = "pong"
 )
 
 // Message represents a Dogecoin protocol message
@@ -110,7 +112,10 @@ func (n *SPVNode) handleMessages() {
 			return
 		}
 
-		switch string(bytes.TrimRight(msg.Command[:], "\x00")) {
+		command := string(bytes.TrimRight(msg.Command[:], "\x00"))
+		log.Printf("Received message of type: %s", command)
+
+		switch command {
 		case MsgVersion:
 			if err := n.handleVersionMessage(msg.Payload); err != nil {
 				log.Printf("Error handling version message: %v", err)
@@ -133,6 +138,12 @@ func (n *SPVNode) handleMessages() {
 			if err := n.handleInvMessage(msg.Payload); err != nil {
 				log.Printf("Error handling inventory message: %v", err)
 			}
+		case MsgPing:
+			if err := n.handlePingMessage(msg.Payload); err != nil {
+				log.Printf("Error handling ping message: %v", err)
+			}
+		default:
+			log.Printf("Ignoring unknown message type: %s", command)
 		}
 	}
 }
@@ -370,6 +381,10 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 
 		// Version (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Version); err != nil {
+			if err == io.EOF && i == count-1 {
+				// EOF at the end of the last header is expected
+				break
+			}
 			return fmt.Errorf("error reading header version: %v", err)
 		}
 
@@ -453,8 +468,51 @@ func (n *SPVNode) handleTxMessage(payload []byte) error {
 
 // handleInvMessage handles an inventory message
 func (n *SPVNode) handleInvMessage(payload []byte) error {
-	// Parse inventory and request items
+	// Parse inventory count (varint)
+	reader := bytes.NewReader(payload)
+	count, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return fmt.Errorf("error reading inventory count: %v", err)
+	}
+
+	// Parse each inventory item
+	for i := uint64(0); i < count; i++ {
+		// Type (4 bytes)
+		var invType uint32
+		if err := binary.Read(reader, binary.LittleEndian, &invType); err != nil {
+			return fmt.Errorf("error reading inventory type: %v", err)
+		}
+
+		// Hash (32 bytes)
+		var hash [32]byte
+		if _, err := reader.Read(hash[:]); err != nil {
+			return fmt.Errorf("error reading inventory hash: %v", err)
+		}
+
+		// If it's a block, request it
+		if invType == 2 { // MSG_BLOCK
+			log.Printf("Received block inventory: %x", hash)
+			// Create getdata message for the block
+			payload := make([]byte, 37) // 1 byte for count + 36 bytes for inventory
+			payload[0] = 1              // Count of inventory items
+			payload[1] = 2              // MSG_BLOCK type
+			copy(payload[2:], hash[:])
+
+			// Send getdata message
+			if err := n.sendMessage(MsgGetData, payload); err != nil {
+				return fmt.Errorf("failed to send getdata message: %v", err)
+			}
+			log.Printf("Sent getdata message for block %x", hash)
+		}
+	}
+
 	return nil
+}
+
+// handlePingMessage handles a ping message
+func (n *SPVNode) handlePingMessage(payload []byte) error {
+	// Send pong message with same nonce
+	return n.sendMessage(MsgPong, payload)
 }
 
 // AddWatchAddress adds an address to watch
