@@ -299,17 +299,21 @@ func (n *SPVNode) GetBlockTransactions(blockHash string) ([]Transaction, error) 
 	if err != nil {
 		return nil, fmt.Errorf("invalid block hash: %v", err)
 	}
+	log.Printf("Converted block hash to bytes: %x", hashBytes)
 
 	// Create getdata message for the block
 	payload := make([]byte, 37) // 1 byte for count + 36 bytes for inventory
 	payload[0] = 1              // Count of inventory items
 	payload[1] = 2              // MSG_BLOCK type
 	copy(payload[2:], hashBytes)
+	log.Printf("Created getdata message payload: %x", payload)
 
 	// Send getdata message
+	log.Printf("Sending getdata message...")
 	if err := n.sendMessage(MsgGetData, payload); err != nil {
 		return nil, fmt.Errorf("failed to send getdata message: %v", err)
 	}
+	log.Printf("Getdata message sent successfully")
 
 	// Create a channel to receive the block message
 	blockChan := make(chan *Block, 1)
@@ -317,57 +321,76 @@ func (n *SPVNode) GetBlockTransactions(blockHash string) ([]Transaction, error) 
 
 	// Start a goroutine to wait for the block message
 	go func() {
+		log.Printf("Starting goroutine to wait for block message...")
 		// Set a timeout for receiving the block
 		timeout := time.After(30 * time.Second)
 
 		for {
 			select {
 			case <-timeout:
+				log.Printf("Timeout waiting for block message")
 				errChan <- fmt.Errorf("timeout waiting for block message")
 				return
 			default:
+				log.Printf("Waiting for next message...")
 				msg, err := n.readMessage()
 				if err != nil {
+					log.Printf("Error reading message: %v", err)
 					errChan <- fmt.Errorf("error reading message: %v", err)
 					return
 				}
 
-				if string(bytes.TrimRight(msg.Command[:], "\x00")) == MsgBlock {
+				command := string(bytes.TrimRight(msg.Command[:], "\x00"))
+				log.Printf("Received message of type: %s", command)
+
+				if command == MsgBlock {
+					log.Printf("Received block message, parsing...")
 					// Parse block message
 					block, err := n.parseBlockMessage(msg.Payload)
 					if err != nil {
+						log.Printf("Error parsing block message: %v", err)
 						errChan <- fmt.Errorf("error parsing block message: %v", err)
 						return
 					}
 
 					// Verify block hash matches what we requested
+					log.Printf("Verifying block hash...")
 					headerBytes := block.Header.Serialize()
 					hash1 := sha256.Sum256(headerBytes)
 					hash2 := sha256.Sum256(hash1[:])
 					if !bytes.Equal(hash2[:], hashBytes) {
+						log.Printf("Block hash mismatch. Expected: %x, Got: %x", hashBytes, hash2[:])
 						errChan <- fmt.Errorf("received block hash does not match requested hash")
 						return
 					}
+					log.Printf("Block hash verified successfully")
 
 					blockChan <- block
 					return
+				} else {
+					log.Printf("Ignoring non-block message of type: %s", command)
 				}
 			}
 		}
 	}()
 
 	// Wait for either the block or an error
+	log.Printf("Waiting for block or error...")
 	select {
 	case block := <-blockChan:
+		log.Printf("Received block, filtering transactions...")
 		// Filter transactions that match our bloom filter
 		var relevantTxs []Transaction
 		for _, tx := range block.Tx {
 			if n.ProcessTransaction(&tx) {
+				log.Printf("Found relevant transaction: %s", tx.TxID)
 				relevantTxs = append(relevantTxs, tx)
 			}
 		}
+		log.Printf("Found %d relevant transactions", len(relevantTxs))
 		return relevantTxs, nil
 	case err := <-errChan:
+		log.Printf("Received error: %v", err)
 		return nil, err
 	}
 }
