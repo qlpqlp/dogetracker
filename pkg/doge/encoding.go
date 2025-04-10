@@ -21,12 +21,16 @@ func DecodeBlock(data []byte) (*Block, error) {
 	offset := 0
 
 	// Decode header
-	block.Header.Version = uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
+	// The version is stored in little-endian format
+	versionBytes := data[offset : offset+4]
+	block.Header.Version = uint32(versionBytes[0]) | uint32(versionBytes[1])<<8 | uint32(versionBytes[2])<<16 | uint32(versionBytes[3])<<24
 	offset += 4
 
 	// Log block version and type
-	// Note: The version is stored in little-endian format, so we need to check the actual value
+	// The version is stored in little-endian format, so we need to check the actual value
+	// 0x20000000 in little-endian is 0x00000020
 	isAuxPow := (block.Header.Version & 0x20000000) != 0
+	log.Printf("Block version bytes: %x", versionBytes)
 	log.Printf("Block version: %x (is AuxPow: %v)", block.Header.Version, isAuxPow)
 
 	block.Header.PrevBlock = make([]byte, 32)
