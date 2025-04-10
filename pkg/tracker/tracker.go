@@ -222,8 +222,12 @@ func (c *DogeTracker) followTheChain(nextBlockHash string) (lastProcessed string
 
 					// Skip the AuxPow data to get to the actual transaction
 					txBytes := data[bytesRead+auxPowDataLength:]
-					tx := doge.DecodeTx(txBytes)
-					block.Block.Tx = append(block.Block.Tx, tx)
+					tx, err := doge.DecodeTx(txBytes)
+					if err != nil {
+						log.Printf("Error decoding transaction in AuxPow block: %v", err)
+						continue
+					}
+					block.Block.Tx = append(block.Block.Tx, *tx)
 				}
 				c.output <- BlockOrUndo{Block: block}
 				lastProcessed = block.Hash
@@ -234,8 +238,13 @@ func (c *DogeTracker) followTheChain(nextBlockHash string) (lastProcessed string
 			block := &ChainBlock{
 				Hash:   head.Hash,
 				Height: head.Height,
-				Block:  doge.DecodeBlock(blockData),
 			}
+			decodedBlock, err := doge.DecodeBlock(blockData)
+			if err != nil {
+				log.Printf("Error decoding block: %v", err)
+				continue
+			}
+			block.Block = *decodedBlock
 			c.output <- BlockOrUndo{Block: block}
 			lastProcessed = block.Hash
 			nextBlockHash = head.NextBlockHash
@@ -263,8 +272,13 @@ func (c *DogeTracker) undoBlocks(head spec.BlockHeader) (undo *UndoForkBlocks, n
 			undo.FullBlocks = append(undo.FullBlocks, &ChainBlock{
 				Hash:   head.Hash,
 				Height: head.Height,
-				Block:  doge.DecodeBlock(blockData),
 			})
+			decodedBlock, err := doge.DecodeBlock(blockData)
+			if err != nil {
+				log.Printf("Error decoding block for undo: %v", err)
+				continue
+			}
+			undo.FullBlocks[len(undo.FullBlocks)-1].Block = *decodedBlock
 		}
 		// Fetch the block header for the previous block.
 		head = c.fetchBlockHeader(head.PreviousBlockHash)
@@ -363,11 +377,11 @@ func (c *DogeTracker) checkShutdown() {
 func ChainFromName(chainName string) (*doge.ChainParams, error) {
 	switch chainName {
 	case "main":
-		return &doge.DogeMainNetChain, nil
+		return &doge.MainNetParams, nil
 	case "test":
-		return &doge.DogeTestNetChain, nil
+		return &doge.TestNetParams, nil
 	case "regtest":
-		return &doge.DogeRegTestChain, nil
+		return &doge.RegTestParams, nil
 	default:
 		return &doge.ChainParams{}, fmt.Errorf("unknown chain: %v", chainName)
 	}
