@@ -53,28 +53,22 @@ func DecodeBlock(data []byte) (*Block, error) {
 
 		if txCount > 0 {
 			// 2. The first transaction is the coinbase transaction
-			// Skip the AuxPow data to get to the actual transaction
-			// The AuxPow data structure is:
-			// - Coinbase transaction
-			// - AuxPow block header (80 bytes)
-			// - AuxPow Merkle branch
-			// - AuxPow parent block header (80 bytes)
-
-			// First, find the start of the actual transaction
-			// Look for the transaction version (0x01000000)
-			for offset < len(data)-4 {
-				if data[offset] == 0x01 && data[offset+1] == 0x00 && data[offset+2] == 0x00 && data[offset+3] == 0x00 {
-					break
-				}
-				offset++
-			}
-
-			// Now decode the actual transaction
+			// For AuxPow blocks, we only process the coinbase transaction
+			// and skip the rest of the AuxPow data
 			tx, err := DecodeTransaction(data[offset:])
 			if err != nil {
 				return nil, err
 			}
 			block.Tx = append(block.Tx, *tx)
+
+			// Skip the rest of the AuxPow data
+			// The AuxPow data structure is:
+			// - Coinbase transaction (already processed)
+			// - AuxPow block header (80 bytes)
+			// - AuxPow Merkle branch
+			// - AuxPow parent block header (80 bytes)
+			// We don't need to process this data for our purposes
+			return block, nil
 		}
 		return block, nil
 	}
