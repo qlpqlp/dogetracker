@@ -28,6 +28,9 @@ const (
 	MsgFilterLoad = "filterload"
 	MsgPing       = "ping"
 	MsgPong       = "pong"
+
+	// MaxMessageSize is the maximum allowed size for a message
+	MaxMessageSize = 32 * 1024 * 1024 // 32MB
 )
 
 // Message represents a Dogecoin protocol message
@@ -297,36 +300,42 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 	return n.sendMessage(MsgHeaders, payload)
 }
 
-// readMessage reads a complete message from the connection
+// readMessage reads a message from the connection
 func (n *SPVNode) readMessage() (*Message, error) {
-	msg := &Message{}
-
-	// Read magic number
-	if _, err := io.ReadFull(n.conn, msg.Magic[:]); err != nil {
-		return nil, err
+	// Read message header (24 bytes)
+	header := make([]byte, 24)
+	if _, err := io.ReadFull(n.conn, header); err != nil {
+		return nil, fmt.Errorf("failed to read message header: %v", err)
 	}
 
-	// Read command
-	if _, err := io.ReadFull(n.conn, msg.Command[:]); err != nil {
-		return nil, err
+	// Parse message length
+	length := binary.LittleEndian.Uint32(header[16:20])
+	if length > MaxMessageSize {
+		return nil, fmt.Errorf("message size %d exceeds maximum allowed size %d", length, MaxMessageSize)
 	}
 
-	// Read length
-	if err := binary.Read(n.conn, binary.LittleEndian, &msg.Length); err != nil {
-		return nil, err
-	}
-
-	// Read checksum
-	if _, err := io.ReadFull(n.conn, msg.Checksum[:]); err != nil {
-		return nil, err
-	}
-
-	// Read payload
-	if msg.Length > 0 {
-		msg.Payload = make([]byte, msg.Length)
-		if _, err := io.ReadFull(n.conn, msg.Payload); err != nil {
-			return nil, err
+	// Read message payload
+	payload := make([]byte, length)
+	if length > 0 {
+		if _, err := io.ReadFull(n.conn, payload); err != nil {
+			return nil, fmt.Errorf("failed to read message payload: %v", err)
 		}
+	}
+
+	// Create message
+	msg := &Message{
+		Magic:   [4]byte{header[0], header[1], header[2], header[3]},
+		Command: [12]byte{},
+		Length:  length,
+		Payload: payload,
+	}
+	copy(msg.Command[:], header[4:16])
+
+	// Verify checksum
+	hash1 := sha256.Sum256(payload)
+	hash2 := sha256.Sum256(hash1[:])
+	if !bytes.Equal(hash2[:4], header[20:24]) {
+		return nil, fmt.Errorf("invalid message checksum")
 	}
 
 	return msg, nil
