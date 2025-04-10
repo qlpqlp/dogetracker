@@ -159,6 +159,12 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					continue
 				}
 
+				// Skip if VOut is invalid (like in coinbase transactions)
+				if vin.VOut == 0xFFFFFFFF {
+					log.Printf("Skipping transaction with invalid VOut: %s", tx.TxID)
+					continue
+				}
+
 				prevTxData, err := blockchain.GetRawTransaction(doge.HexEncodeReversed(vin.TxID))
 				if err != nil {
 					// Skip coinbase transactions silently
