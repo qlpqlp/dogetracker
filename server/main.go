@@ -137,8 +137,12 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					continue
 				}
 				prevTx := doge.DecodeTx(prevTxBytes)
+				if len(prevTx.VIn) == 0 && len(prevTx.VOut) == 0 {
+					log.Printf("Warning: Failed to decode previous transaction %s", doge.HexEncodeReversed(vin.TxID))
+					continue
+				}
 				if int(vin.VOut) >= len(prevTx.VOut) {
-					log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, vin.TxID, len(prevTx.VOut))
+					log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, doge.HexEncodeReversed(vin.TxID), len(prevTx.VOut))
 					continue
 				}
 				// Extract address from script
@@ -178,8 +182,12 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 						continue
 					}
 					prevTx := doge.DecodeTx(prevTxBytes)
+					if len(prevTx.VIn) == 0 && len(prevTx.VOut) == 0 {
+						log.Printf("Warning: Failed to decode previous transaction %s", doge.HexEncodeReversed(vin.TxID))
+						continue
+					}
 					if int(vin.VOut) >= len(prevTx.VOut) {
-						log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, vin.TxID, len(prevTx.VOut))
+						log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, doge.HexEncodeReversed(vin.TxID), len(prevTx.VOut))
 						continue
 					}
 					totalInput += float64(prevTx.VOut[vin.VOut].Value) / 1e8
@@ -226,6 +234,10 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 							prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
 							if err == nil {
 								prevTx := doge.DecodeTx(prevTxBytes)
+								if len(prevTx.VIn) == 0 && len(prevTx.VOut) == 0 {
+									log.Printf("Warning: Failed to decode previous transaction %s", doge.HexEncodeReversed(tx.VIn[0].TxID))
+									continue
+								}
 								if int(tx.VIn[0].VOut) < len(prevTx.VOut) {
 									prevOut := prevTx.VOut[tx.VIn[0].VOut]
 									_, senderAddr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
@@ -347,6 +359,10 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					continue
 				}
 				prevTx := doge.DecodeTx(prevTxBytes)
+				if len(prevTx.VIn) == 0 && len(prevTx.VOut) == 0 {
+					log.Printf("Warning: Failed to decode previous transaction %s", txIDHex)
+					continue
+				}
 				if int(vin.VOut) >= len(prevTx.VOut) {
 					log.Printf("Warning: VOut index %d out of range for transaction %s (len: %d)", vin.VOut, txIDHex, len(prevTx.VOut))
 					continue
