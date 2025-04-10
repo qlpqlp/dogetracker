@@ -431,3 +431,46 @@ func (t *Tracker) storeTransaction(tx *doge.Transaction, addresses []string) err
 	// Commit transaction
 	return dbTx.Commit()
 }
+
+// ProcessBlocks processes blocks from the blockchain
+func (t *Tracker) ProcessBlocks(ctx context.Context, startBlock int64) error {
+	// Get current block height
+	currentHeight, err := t.spvNode.GetBlockCount()
+	if err != nil {
+		return fmt.Errorf("error getting block count: %v", err)
+	}
+
+	// Process blocks from startBlock to currentHeight
+	for height := startBlock; height <= currentHeight; height++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			// Get block hash
+			blockHash, err := t.spvNode.GetBlockHash(height)
+			if err != nil {
+				return fmt.Errorf("error getting block hash at height %d: %v", height, err)
+			}
+
+			// Get block transactions
+			transactions, err := t.spvNode.GetBlockTransactions(blockHash)
+			if err != nil {
+				return fmt.Errorf("error getting transactions for block %s: %v", blockHash, err)
+			}
+
+			// Process each transaction
+			for _, tx := range transactions {
+				// Check if transaction is relevant to watched addresses
+				if t.spvNode.ProcessTransaction(&tx) {
+					// Store transaction in database
+					err = t.storeTransaction(&tx, []string{blockHash})
+					if err != nil {
+						return fmt.Errorf("error storing transaction %s: %v", tx.TxID, err)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
