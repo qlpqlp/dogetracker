@@ -100,6 +100,37 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 	for txIndex, tx := range block.Block.Tx {
 		log.Printf("Processing %d/%d: %s", txIndex+1, len(block.Block.Tx), tx.TxID)
 
+		// Print raw transaction data
+		log.Printf("Raw transaction data for %s:", tx.TxID)
+		log.Printf("Version: %d", tx.Version)
+		log.Printf("LockTime: %d", tx.LockTime)
+		log.Printf("Number of inputs: %d", len(tx.VIn))
+		log.Printf("Number of outputs: %d", len(tx.VOut))
+
+		// Print input details
+		for i, vin := range tx.VIn {
+			log.Printf("Input %d:", i)
+			log.Printf("  TxID: %x", vin.TxID)
+			log.Printf("  VOut: %d", vin.VOut)
+			log.Printf("  Script: %x", vin.Script)
+			log.Printf("  Sequence: %d", vin.Sequence)
+		}
+
+		// Print output details
+		for i, vout := range tx.VOut {
+			log.Printf("Output %d:", i)
+			log.Printf("  Value: %d", vout.Value)
+			log.Printf("  Script: %x", vout.Script)
+		}
+
+		// Check if this is a coinbase transaction
+		isCoinbase := len(tx.VIn) > 0 && len(tx.VIn[0].TxID) == 0
+		if isCoinbase {
+			log.Printf("Transaction %s is a coinbase transaction, skipping input processing", tx.TxID)
+			// Skip processing inputs for coinbase transactions
+			continue
+		}
+
 		// Calculate transaction fee only if it involves a tracked address
 		var fee float64
 		var hasTrackedAddress bool
