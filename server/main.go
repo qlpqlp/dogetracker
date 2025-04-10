@@ -95,18 +95,21 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 		}{id, requiredConfirmations}
 	}
 
+	// Check if this is an AuxPow block
+	isAuxPow := block.Block.Header.Version >= 0x20000000
+	if isAuxPow {
+		log.Printf("Block %d is an AuxPow block, only processing coinbase transaction", block.Height)
+	}
+
 	// Process each transaction in the block
 	log.Printf("Starting to process block %d with %d transactions", block.Height, len(block.Block.Tx))
 	for txIndex, tx := range block.Block.Tx {
 		log.Printf("Processing %d/%d: %s", txIndex+1, len(block.Block.Tx), tx.TxID)
 
-		// Check if this is an AuxPow block (version >= 0x20000000)
-		if block.Block.Header.Version >= 0x20000000 {
-			log.Printf("Block %d is an AuxPow block, skipping special processing", block.Height)
-			// For AuxPow blocks, we only process the first transaction (coinbase)
-			if txIndex > 0 {
-				continue
-			}
+		// For AuxPow blocks, we only process the first transaction (coinbase)
+		if isAuxPow && txIndex > 0 {
+			log.Printf("Skipping non-coinbase transaction in AuxPow block")
+			continue
 		}
 
 		// Check if this is a coinbase transaction

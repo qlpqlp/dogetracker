@@ -306,3 +306,26 @@ func ChainFromName(chainName string) (*doge.ChainParams, error) {
 		return &doge.ChainParams{}, fmt.Errorf("unknown chain: %v", chainName)
 	}
 }
+
+func (c *DogeTracker) processBlock(block *ChainBlock) {
+	log.Printf("Starting to process block %d with %d transactions", block.Height, len(block.Block.Transactions))
+	for i, tx := range block.Block.Transactions {
+		log.Printf("Processing %d/%d: %s", i+1, len(block.Block.Transactions), tx.Hash)
+
+		// Add detailed logging for transaction data
+		log.Printf("Transaction data length: %d bytes", len(tx.Data))
+		if len(tx.Data) > 0 {
+			log.Printf("First few bytes of transaction: %x", tx.Data[:min(32, len(tx.Data))])
+		}
+
+		// Add error handling around transaction decoding
+		decodedTx, err := doge.DecodeTransaction(tx.Data)
+		if err != nil {
+			log.Printf("Error decoding transaction %s: %v", tx.Hash, err)
+			continue
+		}
+
+		// Process the decoded transaction
+		c.processTransaction(block, decodedTx)
+	}
+}
