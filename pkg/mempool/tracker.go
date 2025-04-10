@@ -164,9 +164,9 @@ func (t *MempoolTracker) checkMempool() error {
 		tx := doge.DecodeTx(txBytes)
 
 		// Process outputs (incoming transactions)
-		for _, vout := range tx.VOut {
+		for _, vout := range tx.Outputs {
 			// Extract addresses from output script
-			scriptType, addr := doge.ClassifyScript(vout.Script, &doge.DogeMainNetChain)
+			scriptType, addr := doge.ClassifyScript(vout.ScriptPubKey, &doge.DogeMainNetChain)
 			if scriptType == "" {
 				continue
 			}
@@ -178,17 +178,17 @@ func (t *MempoolTracker) checkMempool() error {
 
 				// Get sender address from inputs
 				var senderAddress string
-				if len(tx.VIn) > 0 && len(tx.VIn[0].TxID) > 0 {
+				if len(tx.Inputs) > 0 && len(tx.Inputs[0].PreviousOutput.Hash) > 0 {
 					// Get the first input's previous transaction
-					txIDHex := doge.HexEncodeReversed(tx.VIn[0].TxID)
+					txIDHex := doge.HexEncodeReversed(tx.Inputs[0].PreviousOutput.Hash)
 					prevTxData, err := t.client.GetRawTransaction(txIDHex)
 					if err == nil {
 						prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
 						if err == nil {
 							prevTx := doge.DecodeTx(prevTxBytes)
-							if int(tx.VIn[0].VOut) < len(prevTx.VOut) {
-								prevOut := prevTx.VOut[tx.VIn[0].VOut]
-								_, senderAddr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+							if int(tx.Inputs[0].PreviousOutput.Index) < len(prevTx.Outputs) {
+								prevOut := prevTx.Outputs[tx.Inputs[0].PreviousOutput.Index]
+								_, senderAddr := doge.ClassifyScript(prevOut.ScriptPubKey, &doge.DogeMainNetChain)
 								senderAddress = string(senderAddr)
 							}
 						}
@@ -227,14 +227,14 @@ func (t *MempoolTracker) checkMempool() error {
 		}
 
 		// Process inputs (outgoing transactions)
-		for _, vin := range tx.VIn {
+		for _, vin := range tx.Inputs {
 			// Skip coinbase transactions (they have empty TxID)
-			if len(vin.TxID) == 0 {
+			if len(vin.PreviousOutput.Hash) == 0 {
 				continue
 			}
 
 			// Get the previous transaction
-			txIDHex := doge.HexEncodeReversed(vin.TxID)
+			txIDHex := doge.HexEncodeReversed(vin.PreviousOutput.Hash)
 			prevTxData, err := t.client.GetRawTransaction(txIDHex)
 			if err != nil {
 				continue
@@ -247,9 +247,9 @@ func (t *MempoolTracker) checkMempool() error {
 			prevTx := doge.DecodeTx(prevTxBytes)
 
 			// Check if the spent output belonged to a tracked address
-			if vin.VOut < uint32(len(prevTx.VOut)) {
-				prevOut := prevTx.VOut[vin.VOut]
-				scriptType, addr := doge.ClassifyScript(prevOut.Script, &doge.DogeMainNetChain)
+			if vin.PreviousOutput.Index < uint32(len(prevTx.Outputs)) {
+				prevOut := prevTx.Outputs[vin.PreviousOutput.Index]
+				scriptType, addr := doge.ClassifyScript(prevOut.ScriptPubKey, &doge.DogeMainNetChain)
 				if scriptType == "" {
 					continue
 				}

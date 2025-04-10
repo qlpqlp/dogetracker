@@ -1,6 +1,9 @@
 package doge
 
-import "net"
+import (
+	"encoding/binary"
+	"net"
+)
 
 // Block represents a Dogecoin block
 type Block struct {
@@ -18,6 +21,18 @@ type BlockHeader struct {
 	Nonce         uint32
 	Height        uint32
 	Confirmations int64
+}
+
+// Serialize serializes a block header into bytes
+func (h *BlockHeader) Serialize() []byte {
+	buf := make([]byte, 80)
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(h.Version))
+	copy(buf[4:36], h.PrevBlock[:])
+	copy(buf[36:68], h.MerkleRoot[:])
+	binary.LittleEndian.PutUint32(buf[68:72], h.Time)
+	binary.LittleEndian.PutUint32(buf[72:76], h.Bits)
+	binary.LittleEndian.PutUint32(buf[76:80], h.Nonce)
+	return buf
 }
 
 // BlockchainBlock represents a block in the blockchain
@@ -64,6 +79,7 @@ type SPVNode struct {
 	watchAddresses map[string]bool
 	bloomFilter    []byte
 	conn           net.Conn
+	verackReceived chan struct{}
 }
 
 // Blockchain represents a connection to a Dogecoin node
