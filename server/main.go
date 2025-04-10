@@ -123,6 +123,8 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 			for _, vin := range tx.VIn {
 				// Skip coinbase transactions (they have empty TxID)
 				if len(vin.TxID) == 0 {
+					// This is a coinbase transaction, we can skip it
+					log.Printf("Skipping coinbase transaction %s", tx.TxID)
 					continue
 				}
 
@@ -136,9 +138,16 @@ func ProcessBlockTransactions(db *sql.DB, block *tracker.ChainBlock, blockchain 
 					log.Printf("Error decoding previous transaction hex: %v", err)
 					continue
 				}
+				// Add logging for raw transaction data
+				log.Printf("Decoding transaction %s with %d bytes", doge.HexEncodeReversed(vin.TxID), len(prevTxBytes))
+				if len(prevTxBytes) == 0 {
+					log.Printf("Warning: Empty transaction data for %s", doge.HexEncodeReversed(vin.TxID))
+					continue
+				}
 				prevTx := doge.DecodeTx(prevTxBytes)
+				// Check for invalid transaction structure
 				if len(prevTx.VIn) == 0 && len(prevTx.VOut) == 0 {
-					log.Printf("Warning: Failed to decode previous transaction %s", doge.HexEncodeReversed(vin.TxID))
+					log.Printf("Warning: Failed to decode previous transaction %s - empty VIn and VOut", doge.HexEncodeReversed(vin.TxID))
 					continue
 				}
 				// Check if VOut index is valid
