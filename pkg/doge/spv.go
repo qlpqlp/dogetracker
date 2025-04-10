@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"os"
 	"time"
@@ -1080,10 +1081,83 @@ func (n *SPVNode) addressToScriptHash(address string) []byte {
 	return []byte{}
 }
 
-// extractAddresses extracts addresses from a script
-func (n *SPVNode) extractAddresses(script []byte) []string {
-	// TODO: Implement address extraction
-	return []string{}
+// ExtractAddresses extracts addresses from a script
+func (n *SPVNode) ExtractAddresses(script []byte) []string {
+	addresses := make([]string, 0)
+
+	// Check script length
+	if len(script) < 23 { // Minimum length for P2PKH
+		return addresses
+	}
+
+	// Check for P2PKH (Pay to Public Key Hash)
+	// Format: OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG
+	if len(script) == 25 && script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88 && script[24] == 0xac {
+		pubKeyHash := script[3:23]
+		// Convert to base58check with version byte 0x1E (Dogecoin P2PKH)
+		version := []byte{0x1E}
+		data := append(version, pubKeyHash...)
+		hash1 := sha256.Sum256(data)
+		hash2 := sha256.Sum256(hash1[:])
+		checksum := hash2[:4]
+		final := append(data, checksum...)
+		address := base58Encode(final)
+		addresses = append(addresses, address)
+		return addresses
+	}
+
+	// Check for P2SH (Pay to Script Hash)
+	// Format: OP_HASH160 <20 bytes> OP_EQUAL
+	if len(script) == 23 && script[0] == 0xa9 && script[1] == 0x14 && script[22] == 0x87 {
+		scriptHash := script[2:22]
+		// Convert to base58check with version byte 0x16 (Dogecoin P2SH)
+		version := []byte{0x16}
+		data := append(version, scriptHash...)
+		hash1 := sha256.Sum256(data)
+		hash2 := sha256.Sum256(hash1[:])
+		checksum := hash2[:4]
+		final := append(data, checksum...)
+		address := base58Encode(final)
+		addresses = append(addresses, address)
+		return addresses
+	}
+
+	return addresses
+}
+
+// base58Encode encodes a byte slice to base58
+func base58Encode(input []byte) string {
+	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+	// Convert big-endian bytes to big int
+	var n big.Int
+	n.SetBytes(input)
+
+	// Divide by 58 until quotient becomes zero
+	var result []byte
+	mod := new(big.Int)
+	zero := new(big.Int)
+	base := big.NewInt(58)
+
+	for n.Cmp(zero) > 0 {
+		n.DivMod(&n, base, mod)
+		result = append(result, alphabet[mod.Int64()])
+	}
+
+	// Add leading zeros
+	for _, b := range input {
+		if b != 0 {
+			break
+		}
+		result = append(result, alphabet[0])
+	}
+
+	// Reverse
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+
+	return string(result)
 }
 
 // GetBlockHeader gets a block header from the network

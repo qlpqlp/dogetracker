@@ -417,7 +417,9 @@ func (t *Tracker) storeTransaction(tx *doge.Transaction, addresses []string) err
 
 	// Insert transaction outputs
 	for _, output := range tx.Outputs {
-		for _, addr := range output.Addresses {
+		// Extract addresses from ScriptPubKey
+		addresses := t.spvNode.ExtractAddresses(output.ScriptPubKey)
+		for _, addr := range addresses {
 			_, err = dbTx.Exec(`
 				INSERT INTO transaction_outputs (txid, address, value)
 				VALUES ($1, $2, $3)
