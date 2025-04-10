@@ -314,7 +314,9 @@ func (n *SPVNode) sendGetHeaders() error {
 	payload := make([]byte, 0)
 
 	// Version (4 bytes)
-	binary.LittleEndian.PutUint32(payload[0:4], ProtocolVersion)
+	versionBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(versionBytes, ProtocolVersion)
+	payload = append(payload, versionBytes...)
 
 	// Hash count (varint)
 	payload = append(payload, 0x01) // One hash
@@ -325,6 +327,7 @@ func (n *SPVNode) sendGetHeaders() error {
 	// Stop hash (32 bytes)
 	payload = append(payload, make([]byte, 32)...) // Zero hash to get all headers
 
+	log.Printf("Sending getheaders message with payload length: %d", len(payload))
 	return n.sendMessage(MsgGetHeaders, payload)
 }
 
@@ -342,12 +345,15 @@ func (n *SPVNode) handleVersionMessage(payload []byte) error {
 
 // handleHeadersMessage handles a headers message
 func (n *SPVNode) handleHeadersMessage(payload []byte) error {
+	log.Printf("Received headers message with payload length: %d", len(payload))
+
 	// Parse headers count (varint)
 	reader := bytes.NewReader(payload)
 	count, err := binary.ReadUvarint(reader)
 	if err != nil {
-		return err
+		return fmt.Errorf("error reading headers count: %v", err)
 	}
+	log.Printf("Headers count: %d", count)
 
 	// Parse each header
 	for i := uint64(0); i < count; i++ {
@@ -355,36 +361,37 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 
 		// Version (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Version); err != nil {
-			return err
+			return fmt.Errorf("error reading header version: %v", err)
 		}
 
 		// Previous block hash (32 bytes)
 		if _, err := reader.Read(header.PrevBlock[:]); err != nil {
-			return err
+			return fmt.Errorf("error reading previous block hash: %v", err)
 		}
 
 		// Merkle root (32 bytes)
 		if _, err := reader.Read(header.MerkleRoot[:]); err != nil {
-			return err
+			return fmt.Errorf("error reading merkle root: %v", err)
 		}
 
 		// Time (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Time); err != nil {
-			return err
+			return fmt.Errorf("error reading header time: %v", err)
 		}
 
 		// Bits (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Bits); err != nil {
-			return err
+			return fmt.Errorf("error reading header bits: %v", err)
 		}
 
 		// Nonce (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Nonce); err != nil {
-			return err
+			return fmt.Errorf("error reading header nonce: %v", err)
 		}
 
 		// Store header
 		n.headers[header.Height] = header
+		log.Printf("Stored header at height %d", header.Height)
 	}
 
 	return nil
