@@ -360,7 +360,7 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 		binary.LittleEndian.PutUint32(nonceBytes, header.Nonce)
 		payload = append(payload, nonceBytes...)
 
-		// Transaction count (varint) - always 0 for headers message
+		// Transaction count (varint) - should be 0 for headers message
 		payload = append(payload, 0x00)
 	}
 
@@ -644,9 +644,8 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			return fmt.Errorf("error reading nonce: %v", err)
 		}
 
-		// Transaction count (varint)
-		txCount, err := binary.ReadUvarint(reader)
-		if err != nil {
+		// Transaction count (varint) - should be 0 for headers message
+		if _, err := binary.ReadUvarint(reader); err != nil {
 			return fmt.Errorf("error reading transaction count: %v", err)
 		}
 
