@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"fmt"
 	"time"
 )
 
@@ -47,14 +46,8 @@ type UnspentOutput struct {
 
 // InitDB initializes the database schema
 func InitDB(db *sql.DB) error {
-	// Drop existing headers table if it exists
-	_, err := db.Exec(`DROP TABLE IF EXISTS headers CASCADE`)
-	if err != nil {
-		return fmt.Errorf("error dropping headers table: %v", err)
-	}
-
 	// Create blocks table
-	_, err = db.Exec(`
+	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS blocks (
 			hash VARCHAR(64) PRIMARY KEY,
 			height BIGINT NOT NULL,
@@ -71,41 +64,28 @@ func InitDB(db *sql.DB) error {
 		return err
 	}
 
-	// Create headers table with BYTEA column
+	// Create last_processed_block table
 	_, err = db.Exec(`
-		CREATE TABLE headers (
-			hash VARCHAR(64) PRIMARY KEY,
-			height BIGINT NOT NULL,
-			header BYTEA NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		CREATE TABLE IF NOT EXISTS last_processed_block (
+			id INTEGER PRIMARY KEY DEFAULT 1,
+			block_hash VARCHAR(64) NOT NULL,
+			block_height BIGINT NOT NULL,
+			prev_block_hash VARCHAR(64) NOT NULL,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
-		return fmt.Errorf("error creating headers table: %v", err)
+		return err
 	}
 
-	// Insert genesis block into headers table
-	genesisHeader := []byte{
-		0x01, 0x00, 0x00, 0x00, // Version
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Prev block
-		0x1a, 0x91, 0xe3, 0xda, 0xce, 0x36, 0xe2, 0xbe, 0x3b, 0xf0, 0x30, 0xa6, 0x56, 0x79, 0xfe, 0x82,
-		0x1a, 0xa1, 0xd6, 0xef, 0x92, 0xe7, 0xc9, 0x90, 0x2e, 0xb3, 0x18, 0x18, 0x2c, 0x35, 0x56, 0x91, // Merkle root
-		0x24, 0x8d, 0x52, 0x52, // Time
-		0xff, 0xff, 0x0f, 0x1e, // Bits
-		0x67, 0x86, 0x01, 0x00, // Nonce
-	}
-
+	// Insert default row if not exists
 	_, err = db.Exec(`
-		INSERT INTO headers (hash, height, header)
-		VALUES (
-			'1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691',
-			0,
-			$1
-		) ON CONFLICT (hash) DO NOTHING
-	`, genesisHeader)
+		INSERT INTO last_processed_block (id, block_hash, block_height, prev_block_hash)
+		VALUES (1, '1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691', 0, '0000000000000000000000000000000000000000000000000000000000000000')
+		ON CONFLICT (id) DO NOTHING
+	`)
 	if err != nil {
-		return fmt.Errorf("error inserting genesis block: %v", err)
+		return err
 	}
 
 	// Create tracked_addresses table
@@ -171,31 +151,6 @@ func InitDB(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_address_id ON unspent_outputs(address_id);
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_tx_id ON unspent_outputs(tx_id);
 		CREATE INDEX IF NOT EXISTS idx_blocks_height ON blocks(height);
-		CREATE INDEX IF NOT EXISTS idx_headers_height ON headers(height);
-	`)
-
-	if err != nil {
-		return err
-	}
-
-	// Create last_processed_block table
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS last_processed_block (
-			id INTEGER PRIMARY KEY DEFAULT 1,
-			block_hash VARCHAR(64) NOT NULL,
-			block_height BIGINT NOT NULL,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Insert default row if not exists
-	_, err = db.Exec(`
-		INSERT INTO last_processed_block (id, block_hash, block_height)
-		VALUES (1, '1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691', 0)
-		ON CONFLICT (id) DO NOTHING
 	`)
 
 	return err

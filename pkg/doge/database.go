@@ -14,9 +14,8 @@ type BlockDatabase interface {
 	GetBlock(hash string) (*Block, error)
 	GetTransaction(txid string) (*Transaction, error)
 	GetBlockHeight(hash string) (uint32, error)
-	GetLastProcessedBlock() (int64, error)
-	StoreHeader(header BlockHeader, height uint32) error
-	GetHeaders() (map[uint32]BlockHeader, error)
+	GetLastProcessedBlock() (string, uint32, string, error) // Returns (blockHash, height, prevBlockHash)
+	UpdateLastProcessedBlock(blockHash string, height uint32, prevBlockHash string) error
 }
 
 // SQLDatabase implements the BlockDatabase interface using SQL
@@ -290,71 +289,28 @@ func (d *SQLDatabase) GetBlockHeight(hash string) (uint32, error) {
 	return height, nil
 }
 
-// GetLastProcessedBlock retrieves the last processed block height
-func (d *SQLDatabase) GetLastProcessedBlock() (int64, error) {
-	var blockHeight int64
+// GetLastProcessedBlock retrieves the last processed block information
+func (d *SQLDatabase) GetLastProcessedBlock() (string, uint32, string, error) {
+	var blockHash string
+	var height uint32
+	var prevBlockHash string
 	err := d.db.QueryRow(`
-		SELECT block_height 
+		SELECT block_hash, block_height, prev_block_hash 
 		FROM last_processed_block 
 		WHERE id = 1
-	`).Scan(&blockHeight)
+	`).Scan(&blockHash, &height, &prevBlockHash)
 	if err != nil {
-		return 0, err
+		return "", 0, "", err
 	}
-	return blockHeight, nil
+	return blockHash, height, prevBlockHash, nil
 }
 
-// StoreHeader stores a block header in the database
-func (d *SQLDatabase) StoreHeader(header BlockHeader, height uint32) error {
-	// Calculate block hash
-	headerBytes := header.Serialize()
-	hash1 := sha256.Sum256(headerBytes)
-	hash2 := sha256.Sum256(hash1[:])
-	blockHash := hex.EncodeToString(hash2[:])
-
-	// Store block header
+// UpdateLastProcessedBlock updates the last processed block information
+func (d *SQLDatabase) UpdateLastProcessedBlock(blockHash string, height uint32, prevBlockHash string) error {
 	_, err := d.db.Exec(`
-		INSERT INTO headers (hash, height, header)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (hash) DO UPDATE
-		SET height = $2, header = $3
-	`, blockHash, height, headerBytes)
-	if err != nil {
-		return fmt.Errorf("error storing block header: %v", err)
-	}
-
-	return nil
-}
-
-// GetHeaders retrieves all block headers from the database
-func (d *SQLDatabase) GetHeaders() (map[uint32]BlockHeader, error) {
-	headers := make(map[uint32]BlockHeader)
-
-	rows, err := d.db.Query(`
-		SELECT height, version, prev_block, merkle_root, time, bits, nonce
-		FROM blocks
-		ORDER BY height
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("error querying headers: %v", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var header BlockHeader
-		var height uint32
-		var prevBlock, merkleRoot []byte
-
-		err := rows.Scan(&height, &header.Version, &prevBlock,
-			&merkleRoot, &header.Time, &header.Bits, &header.Nonce)
-		if err != nil {
-			return nil, fmt.Errorf("error scanning header: %v", err)
-		}
-
-		copy(header.PrevBlock[:], prevBlock)
-		copy(header.MerkleRoot[:], merkleRoot)
-		headers[height] = header
-	}
-
-	return headers, nil
+		UPDATE last_processed_block 
+		SET block_hash = $1, block_height = $2, prev_block_hash = $3, updated_at = CURRENT_TIMESTAMP
+		WHERE id = 1
+	`, blockHash, height, prevBlockHash)
+	return err
 }

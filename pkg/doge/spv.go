@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/mr-tron/base58"
 )
 
 const (
@@ -40,11 +41,46 @@ const (
 
 // Message represents a Dogecoin protocol message
 type Message struct {
-	Magic    [4]byte
-	Command  [12]byte
-	Length   uint32
-	Checksum [4]byte
-	Payload  []byte
+	Command [12]byte
+	Payload []byte
+}
+
+// BlockDatabase interface defines the methods required for block storage
+type BlockDatabase interface {
+	StoreBlock(block *Block) error
+	GetBlock(hash string) (*Block, error)
+	GetBlockHeight(hash string) (int64, error)
+	GetLastProcessedBlock() (string, int64, int64, error)
+	StoreTransaction(tx *Transaction, blockHash string, height uint32) error
+	GetTransaction(hash string) (*Transaction, error)
+	GetHeaders() ([]*BlockHeader, error)
+}
+
+// BlockHeader represents a Dogecoin block header
+type BlockHeader struct {
+	Version    uint32
+	PrevBlock  [32]byte
+	MerkleRoot [32]byte
+	Timestamp  uint32
+	Bits       uint32
+	Nonce      uint32
+	Height     uint32
+}
+
+// Deserialize reads a block header from a byte slice
+func (h *BlockHeader) Deserialize(data []byte) error {
+	if len(data) < 80 {
+		return fmt.Errorf("header data too short")
+	}
+
+	h.Version = binary.LittleEndian.Uint32(data[0:4])
+	copy(h.PrevBlock[:], data[4:36])
+	copy(h.MerkleRoot[:], data[36:68])
+	h.Timestamp = binary.LittleEndian.Uint32(data[68:72])
+	h.Bits = binary.LittleEndian.Uint32(data[72:76])
+	h.Nonce = binary.LittleEndian.Uint32(data[76:80])
+
+	return nil
 }
 
 // SPVNode represents a Simplified Payment Verification node
@@ -72,23 +108,11 @@ type SPVNode struct {
 	startHeight        uint32
 	headersMutex       sync.RWMutex
 	blockChan          chan *Block
+	targetHeight       uint32
 }
 
 // NewSPVNode creates a new SPV node
 func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase) *SPVNode {
-	// Get last processed block from database
-	lastBlockHeight, err := db.GetLastProcessedBlock()
-	if err != nil {
-		log.Printf("Error getting last processed block: %v", err)
-		// If no last block found, start from genesis
-		lastBlockHeight = 0
-	}
-
-	// If startHeight is provided and is higher than last processed block, use it
-	if startHeight > uint32(lastBlockHeight) {
-		lastBlockHeight = int64(startHeight)
-	}
-
 	// Initialize chain params with Dogecoin mainnet parameters
 	chainParams := &ChainParams{
 		ChainName:    "mainnet",
@@ -104,8 +128,8 @@ func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase) *SPVNode {
 		peers:              peers,
 		headers:            make(map[uint32]BlockHeader),
 		blocks:             make(map[string]*Block),
-		currentHeight:      uint32(lastBlockHeight),
-		startHeight:        uint32(lastBlockHeight),
+		currentHeight:      uint32(startHeight),
+		startHeight:        uint32(startHeight),
 		bestKnownHeight:    0,
 		db:                 db,
 		verackReceived:     make(chan struct{}),
@@ -116,6 +140,7 @@ func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase) *SPVNode {
 		stopChan:           make(chan struct{}),
 		reconnectDelay:     5 * time.Second,
 		blockChan:          make(chan *Block),
+		targetHeight:       uint32(startHeight),
 	}
 
 	// Load existing headers from database
@@ -241,7 +266,7 @@ func (n *SPVNode) ConnectToPeer(peer string) error {
 
 	// Send getheaders message
 	n.logger.Printf("Sending getheaders message...")
-	if err := n.sendGetHeaders(); err != nil {
+	if err := n.sendGetHeaders(hex.EncodeToString(n.headers[n.currentHeight].PrevBlock[:])); err != nil {
 		n.conn.Close()
 		n.conn = nil
 		n.connected = false
@@ -279,7 +304,7 @@ func (n *SPVNode) handleMessages() {
 		case MsgVerack:
 			n.verackReceived <- struct{}{}
 		case MsgHeaders:
-			if err := n.handleHeadersMessage(msg.Payload); err != nil {
+			if err := n.handleHeadersMessage(msg); err != nil {
 				n.logger.Printf("Error handling headers message: %v", err)
 			}
 		case MsgBlock:
@@ -287,7 +312,7 @@ func (n *SPVNode) handleMessages() {
 				n.logger.Printf("Error handling block message: %v", err)
 			}
 		case MsgTx:
-			if err := n.handleTxMessage(msg.Payload); err != nil {
+			if err := n.handleTxMessage(msg); err != nil {
 				n.logger.Printf("Error handling transaction message: %v", err)
 			}
 		case MsgInv:
@@ -388,7 +413,7 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 
 		// Time (4 bytes)
 		timeBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(timeBytes, header.Time)
+		binary.LittleEndian.PutUint32(timeBytes, header.Timestamp)
 		payload = append(payload, timeBytes...)
 
 		// Bits (4 bytes)
@@ -433,9 +458,7 @@ func (n *SPVNode) readMessage() (*Message, error) {
 
 	// Create message
 	msg := &Message{
-		Magic:   [4]byte{header[0], header[1], header[2], header[3]},
 		Command: [12]byte{},
-		Length:  length,
 		Payload: payload,
 	}
 	copy(msg.Command[:], header[4:16])
@@ -452,33 +475,18 @@ func (n *SPVNode) readMessage() (*Message, error) {
 
 // sendMessage sends a message to the peer
 func (n *SPVNode) sendMessage(command string, payload []byte) error {
-	msg := &Message{
-		Magic:   [4]byte{0xc0, 0xc0, 0xc0, 0xc0}, // Dogecoin magic number
-		Length:  uint32(len(payload)),
-		Payload: payload,
+	// Write message header
+	if err := binary.Write(n.conn, binary.LittleEndian, command); err != nil {
+		return err
 	}
 
-	// Set command
-	copy(msg.Command[:], command)
+	// Write payload length
+	length := uint32(len(payload))
+	if err := binary.Write(n.conn, binary.LittleEndian, length); err != nil {
+		return err
+	}
 
-	// Calculate checksum
-	hash := sha256.Sum256(payload)
-	hash = sha256.Sum256(hash[:])
-	copy(msg.Checksum[:], hash[:4])
-
-	// Write message
-	if err := binary.Write(n.conn, binary.LittleEndian, msg.Magic); err != nil {
-		return err
-	}
-	if err := binary.Write(n.conn, binary.LittleEndian, msg.Command); err != nil {
-		return err
-	}
-	if err := binary.Write(n.conn, binary.LittleEndian, msg.Length); err != nil {
-		return err
-	}
-	if err := binary.Write(n.conn, binary.LittleEndian, msg.Checksum); err != nil {
-		return err
-	}
+	// Write payload
 	if len(payload) > 0 {
 		if _, err := n.conn.Write(payload); err != nil {
 			return err
@@ -586,81 +594,49 @@ func (n *SPVNode) sendFilterLoadMessage() error {
 	return n.sendMessage(MsgFilterLoad, payload)
 }
 
-// sendGetHeaders sends a getheaders message to request headers
-func (n *SPVNode) sendGetHeaders() error {
-	// Create getheaders message payload
-	payload := make([]byte, 0)
+// sendGetHeaders sends a getheaders message to request block headers
+func (n *SPVNode) sendGetHeaders(startHash string) error {
+	// Get last processed block info
+	lastHash, lastHeight, _, err := n.db.GetLastProcessedBlock()
+	if err != nil {
+		return fmt.Errorf("error getting last processed block: %v", err)
+	}
 
-	// Version (4 bytes)
-	versionBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(versionBytes, ProtocolVersion)
-	payload = append(payload, versionBytes...)
-
-	// Hash count (varint)
-	payload = append(payload, 0x01) // One hash
-
-	// Block locator hashes (32 bytes)
-	// If we're starting from a specific height and have no headers yet,
-	// we need to request headers from the genesis block
-	if len(n.headers) == 0 && n.startHeight > 0 {
-		n.logger.Printf("Starting from height %d, requesting headers from genesis", n.startHeight)
-		// Use genesis block hash
+	// Build block locator hashes
+	locatorHashes := [][]byte{}
+	if lastHeight > 0 {
+		// Start from last processed block
+		hashBytes, err := hex.DecodeString(lastHash)
+		if err != nil {
+			return fmt.Errorf("error decoding block hash: %v", err)
+		}
+		locatorHashes = append(locatorHashes, hashBytes)
+	} else {
+		// Start from genesis block
 		genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
 		if err != nil {
-			return fmt.Errorf("failed to decode genesis block hash: %v", err)
+			return fmt.Errorf("error decoding genesis hash: %v", err)
 		}
-		// Reverse the hash (Dogecoin uses little-endian)
-		for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
-			genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
-		}
-		payload = append(payload, genesisHash...)
-	} else {
-		// Start with the block at current height
-		if n.currentHeight > 0 {
-			// Find the block hash at current height
-			n.headersMutex.RLock()
-			header, exists := n.headers[n.currentHeight]
-			n.headersMutex.RUnlock()
+		locatorHashes = append(locatorHashes, genesisHash)
+	}
 
-			if exists {
-				// Calculate hash of the header
-				headerBytes := header.Serialize()
-				hash1 := sha256.Sum256(headerBytes)
-				hash2 := sha256.Sum256(hash1[:])
-				payload = append(payload, hash2[:]...)
-			} else {
-				// If we don't have the header, use genesis block hash
-				genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
-				if err != nil {
-					return fmt.Errorf("failed to decode genesis block hash: %v", err)
-				}
-				// Reverse the hash (Dogecoin uses little-endian)
-				for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
-					genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
-				}
-				payload = append(payload, genesisHash...)
-			}
-		} else {
-			// Start with genesis block hash
-			genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
-			if err != nil {
-				return fmt.Errorf("failed to decode genesis block hash: %v", err)
-			}
-			// Reverse the hash (Dogecoin uses little-endian)
-			for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
-				genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
-			}
-			payload = append(payload, genesisHash...)
+	// Build getheaders message
+	payload := make([]byte, 0)
+	payload = append(payload, uint32ToBytes(70015)...) // Protocol version
+	payload = append(payload, uint8ToBytes(1)...)      // Hash count (always 1 for SPV)
+	payload = append(payload, locatorHashes[0]...)     // Block locator hash
+	payload = append(payload, make([]byte, 32)...)     // Stop hash (all zeros)
+
+	msg := NewMessage("getheaders", payload)
+
+	// Send message to all peers
+	for _, peer := range n.peers {
+		if err := n.sendMessage(msg); err != nil {
+			log.Printf("Error sending getheaders to peer %s: %v", peer, err)
 		}
 	}
 
-	// Stop hash (32 bytes) - all zeros to get all headers
-	stopHash := make([]byte, 32)
-	payload = append(payload, stopHash...)
-
-	n.logger.Printf("Sending getheaders message with payload length: %d", len(payload))
-	n.logger.Printf("Requesting headers starting from height %d", n.currentHeight)
-	return n.sendMessage("getheaders", payload)
+	return nil
 }
 
 // handleVersionMessage handles a version message
@@ -675,175 +651,46 @@ func (n *SPVNode) handleVersionMessage(payload []byte) error {
 	return n.sendMessage(MsgVerack, nil)
 }
 
-// handleHeadersMessage handles a headers message
-func (n *SPVNode) handleHeadersMessage(payload []byte) error {
-	reader := bytes.NewReader(payload)
-
-	// Read headers count (varint)
-	count, err := binary.ReadUvarint(reader)
+// handleHeadersMessage processes incoming headers messages
+func (n *SPVNode) handleHeadersMessage(msg *Message) error {
+	// Read headers count
+	count, err := ReadVarInt(msg.Payload)
 	if err != nil {
 		return fmt.Errorf("error reading headers count: %v", err)
 	}
 
-	n.logger.Printf("Received %d headers", count)
-
-	// Read each header
-	headersProcessed := 0
-	var lastValidHeight uint32 = 0
-
+	// Process each header
+	offset := 1 // Skip the count byte
 	for i := uint64(0); i < count; i++ {
-		// Check if we have enough bytes left
-		if reader.Len() < 80 { // Minimum size for a header
-			n.logger.Printf("Partial headers message received, processed %d headers, requesting more", headersProcessed)
-			// Request more headers from where we left off
-			if err := n.sendGetHeaders(); err != nil {
-				return fmt.Errorf("error requesting more headers: %v", err)
-			}
+		if offset+80 > len(msg.Payload) {
+			log.Printf("Partial headers message received, requesting more")
 			return nil
 		}
 
-		header := BlockHeader{}
+		header := &BlockHeader{}
+		headerData := msg.Payload[offset : offset+80]
+		header.Version = binary.LittleEndian.Uint32(headerData[0:4])
+		copy(header.PrevBlock[:], headerData[4:36])
+		copy(header.MerkleRoot[:], headerData[36:68])
+		header.Timestamp = binary.LittleEndian.Uint32(headerData[68:72])
+		header.Bits = binary.LittleEndian.Uint32(headerData[72:76])
+		header.Nonce = binary.LittleEndian.Uint32(headerData[76:80])
 
-		// Version (4 bytes)
-		if err := binary.Read(reader, binary.LittleEndian, &header.Version); err != nil {
-			return fmt.Errorf("error reading header version: %v", err)
+		// Update current height
+		n.currentHeight++
+		header.Height = uint32(n.currentHeight)
+
+		// Store header
+		if err := n.db.StoreBlock(&Block{Header: *header}); err != nil {
+			return fmt.Errorf("error storing header: %v", err)
 		}
 
-		// Previous block hash (32 bytes)
-		if _, err := reader.Read(header.PrevBlock[:]); err != nil {
-			return fmt.Errorf("error reading previous block hash: %v", err)
-		}
-
-		// Merkle root (32 bytes)
-		if _, err := reader.Read(header.MerkleRoot[:]); err != nil {
-			return fmt.Errorf("error reading merkle root: %v", err)
-		}
-
-		// Time (4 bytes)
-		if err := binary.Read(reader, binary.LittleEndian, &header.Time); err != nil {
-			return fmt.Errorf("error reading time: %v", err)
-		}
-
-		// Bits (4 bytes)
-		if err := binary.Read(reader, binary.LittleEndian, &header.Bits); err != nil {
-			return fmt.Errorf("error reading bits: %v", err)
-		}
-
-		// Nonce (4 bytes)
-		if err := binary.Read(reader, binary.LittleEndian, &header.Nonce); err != nil {
-			return fmt.Errorf("error reading nonce: %v", err)
-		}
-
-		// Transaction count (varint) - should be 0 for headers message
-		txCount, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return fmt.Errorf("error reading transaction count: %v", err)
-		}
-		if txCount != 0 {
-			n.logger.Printf("Warning: header message contains transaction count %d, expected 0", txCount)
-			// Skip the transaction data if present
-			if txCount > 0 {
-				// Skip the transaction data
-				_, err = reader.Read(make([]byte, txCount))
-				if err != nil {
-					return fmt.Errorf("error skipping transaction data: %v", err)
-				}
-			}
-		}
-
-		// Calculate block hash
-		hash := header.Hash()
-		hashStr := hex.EncodeToString(hash[:])
-
-		// Find the height by looking up the previous block
-		var height uint32
-		genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
-		if err != nil {
-			return fmt.Errorf("error decoding genesis block hash: %v", err)
-		}
-		// Reverse the hash (Dogecoin uses little-endian)
-		for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
-			genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
-		}
-
-		if bytes.Equal(header.PrevBlock[:], genesisHash) {
-			// This is the first block after genesis
-			height = 1
-		} else {
-			// First check in memory
-			n.headersMutex.RLock()
-			for h, hdr := range n.headers {
-				if bytes.Equal(hdr.Hash()[:], header.PrevBlock[:]) {
-					height = h + 1
-					break
-				}
-			}
-			n.headersMutex.RUnlock()
-
-			// If not found in memory, check database
-			if height == 0 {
-				prevHash := hex.EncodeToString(header.PrevBlock[:])
-				prevHeight, err := n.db.GetBlockHeight(prevHash)
-				if err == nil {
-					height = prevHeight + 1
-				}
-			}
-		}
-
-		// If we couldn't find the previous block, try to find it in the current batch
-		if height == 0 && lastValidHeight > 0 {
-			// Check if this header's previous block is the last valid header we processed
-			n.headersMutex.RLock()
-			lastHeader, exists := n.headers[lastValidHeight]
-			n.headersMutex.RUnlock()
-			if exists && bytes.Equal(lastHeader.Hash()[:], header.PrevBlock[:]) {
-				height = lastValidHeight + 1
-			}
-		}
-
-		// If we still couldn't find the previous block, skip this header
-		if height == 0 {
-			n.logger.Printf("Warning: Could not find previous block for header %s, skipping", hashStr)
-			continue
-		}
-
-		// Only store headers at or above our start height
-		if height >= n.startHeight {
-			n.logger.Printf("Received header for block %s at height %d", hashStr, height)
-
-			// Store header in memory
-			n.headersMutex.Lock()
-			n.headers[height] = header
-			if height > n.currentHeight {
-				n.currentHeight = height
-			}
-			lastValidHeight = height
-			n.headersMutex.Unlock()
-
-			// Store header in database
-			if err := n.db.StoreHeader(header, height); err != nil {
-				n.logger.Printf("Error storing header in database: %v", err)
-				return fmt.Errorf("error storing header in database: %v", err)
-			}
-
-			headersProcessed++
-		}
+		offset += 80
 	}
 
-	// If we processed all headers in this message, request more if needed
-	if headersProcessed > 0 {
-		n.logger.Printf("Processed %d headers, current height: %d", headersProcessed, n.currentHeight)
-		// Request more headers if we haven't reached the target height
-		if n.currentHeight < n.bestKnownHeight {
-			n.logger.Printf("Requesting more headers from height %d", n.currentHeight+1)
-			return n.sendGetHeaders()
-		} else {
-			n.logger.Printf("Reached target height %d", n.currentHeight)
-			n.headerSyncComplete = true
-			// Start requesting blocks
-			n.logger.Printf("Header sync complete, starting block download from height %d", n.startHeight)
-			return n.sendGetBlocks()
-		}
+	// Request more headers if needed
+	if n.currentHeight < n.targetHeight {
+		return n.sendGetHeaders(n.chainParams.GenesisBlock)
 	}
 
 	return nil
@@ -881,7 +728,7 @@ func (n *SPVNode) handleBlockMessage(payload []byte) error {
 		if n.ProcessTransaction(tx) {
 			n.logger.Printf("Found relevant transaction %s", tx.TxID)
 			// Store transaction in database
-			if err := n.db.StoreTransaction(tx, blockHash, block.Header.Height); err != nil {
+			if err := n.db.StoreTransaction(tx, blockHash, n.currentHeight); err != nil {
 				n.logger.Printf("Error storing transaction %s in database: %v", tx.TxID, err)
 				continue
 			}
@@ -905,10 +752,105 @@ func (n *SPVNode) handleBlockMessage(payload []byte) error {
 	return nil
 }
 
-// handleTxMessage handles a transaction message
-func (n *SPVNode) handleTxMessage(payload []byte) error {
-	// Parse and process transaction
+// handleTxMessage processes incoming transaction messages
+func (n *SPVNode) handleTxMessage(msg *Message) error {
+	tx := &Transaction{}
+	offset := 0
+
+	// Read version
+	if offset+4 > len(msg.Payload) {
+		return fmt.Errorf("not enough bytes for version")
+	}
+	tx.Version = binary.LittleEndian.Uint32(msg.Payload[offset : offset+4])
+	offset += 4
+
+	// Read inputs
+	inputCount, bytesRead := binary.Uvarint(msg.Payload[offset:])
+	if bytesRead <= 0 {
+		return fmt.Errorf("error reading input count")
+	}
+	offset += bytesRead
+
+	for i := uint64(0); i < inputCount; i++ {
+		var input TxInput
+		if offset+36 > len(msg.Payload) {
+			return fmt.Errorf("not enough bytes for input")
+		}
+		copy(input.PreviousOutput.Hash[:], msg.Payload[offset:offset+32])
+		input.PreviousOutput.Index = binary.LittleEndian.Uint32(msg.Payload[offset+32 : offset+36])
+		offset += 36
+
+		// Read script length
+		scriptLen, bytesRead := binary.Uvarint(msg.Payload[offset:])
+		if bytesRead <= 0 {
+			return fmt.Errorf("error reading script length")
+		}
+		offset += bytesRead
+
+		// Read script
+		if offset+int(scriptLen) > len(msg.Payload) {
+			return fmt.Errorf("not enough bytes for script")
+		}
+		input.ScriptSig = make([]byte, scriptLen)
+		copy(input.ScriptSig, msg.Payload[offset:offset+int(scriptLen)])
+		offset += int(scriptLen)
+
+		// Read sequence
+		if offset+4 > len(msg.Payload) {
+			return fmt.Errorf("not enough bytes for sequence")
+		}
+		input.Sequence = binary.LittleEndian.Uint32(msg.Payload[offset : offset+4])
+		offset += 4
+
+		tx.Inputs = append(tx.Inputs, input)
+	}
+
+	// Calculate transaction ID
+	txBytes := msg.Payload[:offset]
+	hash1 := sha256.Sum256(txBytes)
+	hash2 := sha256.Sum256(hash1[:])
+	tx.TxID = hex.EncodeToString(hash2[:])
+
+	// Store transaction in database if relevant
+	if n.isRelevantTransaction(tx) {
+		n.logger.Printf("Found relevant transaction %s", tx.TxID)
+		if err := n.db.StoreTransaction(tx, "", uint32(n.currentHeight)); err != nil {
+			n.logger.Printf("Error storing transaction %s in database: %v", tx.TxID, err)
+			return err
+		}
+	}
+
 	return nil
+}
+
+// isRelevantTransaction checks if a transaction is relevant to the SPV node
+func (n *SPVNode) isRelevantTransaction(tx *Transaction) bool {
+	// Check if any output addresses match our watched addresses
+	for _, output := range tx.Outputs {
+		if n.isWatchedScript(output.ScriptPubKey) {
+			return true
+		}
+	}
+	return false
+}
+
+// isWatchedScript checks if a script corresponds to a watched address
+func (n *SPVNode) isWatchedScript(script []byte) bool {
+	if len(script) < 25 {
+		return false
+	}
+
+	// Check for P2PKH script
+	if script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88 && script[24] == 0xac {
+		pubKeyHash := script[3:23]
+		for addr := range n.watchAddresses {
+			if bytes.Equal(pubKeyHash, []byte(addr)) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // handleInvMessage handles an inventory message
@@ -1270,7 +1212,7 @@ func (n *SPVNode) ExtractAddresses(script []byte) []string {
 		hash2 := sha256.Sum256(hash1[:])
 		checksum := hash2[:4]
 		final := append(data, checksum...)
-		address := base58Encode(final)
+		address := Base58CheckEncode(final, 0x1E)
 		addresses = append(addresses, address)
 		return addresses
 	}
@@ -1286,7 +1228,7 @@ func (n *SPVNode) ExtractAddresses(script []byte) []string {
 		hash2 := sha256.Sum256(hash1[:])
 		checksum := hash2[:4]
 		final := append(data, checksum...)
-		address := base58Encode(final)
+		address := Base58CheckEncode(final, 0x16)
 		addresses = append(addresses, address)
 		return addresses
 	}
@@ -1294,39 +1236,23 @@ func (n *SPVNode) ExtractAddresses(script []byte) []string {
 	return addresses
 }
 
-// base58Encode encodes a byte slice to base58
-func base58Encode(input []byte) string {
-	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+// Base58CheckEncode encodes a byte slice with version prefix in base58 with checksum
+func Base58CheckEncode(input []byte, version byte) string {
+	b := make([]byte, 0, 1+len(input)+4)
+	b = append(b, version)
+	b = append(b, input...)
+	cksum := checksum(b)
+	b = append(b, cksum[:]...)
+	return base58.Encode(b)
+}
 
-	// Convert big-endian bytes to big int
-	var n big.Int
-	n.SetBytes(input)
-
-	// Divide by 58 until quotient becomes zero
-	var result []byte
-	mod := new(big.Int)
-	zero := new(big.Int)
-	base := big.NewInt(58)
-
-	for n.Cmp(zero) > 0 {
-		n.DivMod(&n, base, mod)
-		result = append(result, alphabet[mod.Int64()])
-	}
-
-	// Add leading zeros
-	for _, b := range input {
-		if b != 0 {
-			break
-		}
-		result = append(result, alphabet[0])
-	}
-
-	// Reverse
-	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
-		result[i], result[j] = result[j], result[i]
-	}
-
-	return string(result)
+// checksum returns the first four bytes of the double SHA256 hash
+func checksum(input []byte) [4]byte {
+	h := sha256.Sum256(input)
+	h2 := sha256.Sum256(h[:])
+	var cksum [4]byte
+	copy(cksum[:], h2[:4])
+	return cksum
 }
 
 // GetBlockHeader gets a block header from the network
@@ -1500,4 +1426,56 @@ func (n *SPVNode) sendGetBlocks() error {
 	n.logger.Printf("Sending getblocks message with payload length: %d", len(payload))
 	n.logger.Printf("Requesting blocks starting from height %d", n.currentHeight)
 	return n.sendMessage("getblocks", payload)
+}
+
+// Helper functions for message serialization
+func uint32ToBytes(n uint32) []byte {
+	b := make([]byte, 4)
+	binary.LittleEndian.PutUint32(b, n)
+	return b
+}
+
+func uint8ToBytes(n uint8) []byte {
+	return []byte{n}
+}
+
+// ReadVarInt reads a variable length integer from a byte slice
+func ReadVarInt(payload []byte) (uint64, error) {
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("empty payload")
+	}
+
+	// Read the first byte to determine the format
+	firstByte := payload[0]
+
+	switch {
+	case firstByte < 0xfd:
+		return uint64(firstByte), nil
+	case firstByte == 0xfd:
+		if len(payload) < 3 {
+			return 0, fmt.Errorf("payload too short for uint16")
+		}
+		return uint64(binary.LittleEndian.Uint16(payload[1:3])), nil
+	case firstByte == 0xfe:
+		if len(payload) < 5 {
+			return 0, fmt.Errorf("payload too short for uint32")
+		}
+		return uint64(binary.LittleEndian.Uint32(payload[1:5])), nil
+	case firstByte == 0xff:
+		if len(payload) < 9 {
+			return 0, fmt.Errorf("payload too short for uint64")
+		}
+		return binary.LittleEndian.Uint64(payload[1:9]), nil
+	default:
+		return 0, fmt.Errorf("invalid varint format")
+	}
+}
+
+// NewMessage creates a new message with the given command and payload
+func NewMessage(command string, payload []byte) *Message {
+	msg := &Message{
+		Payload: payload,
+	}
+	copy(msg.Command[:], command)
+	return msg
 }
