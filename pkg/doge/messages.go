@@ -175,6 +175,10 @@ func (n *SPVNode) sendGetHeaders(blockHash string) error {
 	if err != nil {
 		return fmt.Errorf("invalid block hash: %v", err)
 	}
+	// Reverse the hash (Dogecoin uses little-endian)
+	for i, j := 0, len(hash)-1; i < j; i, j = i+1, j-1 {
+		hash[i], hash[j] = hash[j], hash[i]
+	}
 	buf.Write(hash)
 
 	// Stop hash (32 bytes of zeros to get all headers)

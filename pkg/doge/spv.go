@@ -471,6 +471,8 @@ func (n *SPVNode) handleHeadersMessage(msg *Message) error {
 		return nil
 	}
 
+	n.logger.Printf("Received %d headers", count)
+
 	// Process each header
 	offset := 1 // Skip the count byte
 	for i := uint64(0); i < count; i++ {
@@ -486,6 +488,10 @@ func (n *SPVNode) handleHeadersMessage(msg *Message) error {
 		header.Time = binary.LittleEndian.Uint32(headerData[68:72])
 		header.Bits = binary.LittleEndian.Uint32(headerData[72:76])
 		header.Nonce = binary.LittleEndian.Uint32(headerData[76:80])
+
+		// Calculate block hash
+		hash := header.GetHash()
+		blockHash := hex.EncodeToString(hash[:])
 
 		// Validate header
 		if err := n.validateHeader(*header); err != nil {
@@ -503,6 +509,8 @@ func (n *SPVNode) handleHeadersMessage(msg *Message) error {
 
 		// Update chain tip
 		n.chainTip = header
+
+		n.logger.Printf("Processed header %d: %s", n.currentHeight, blockHash)
 
 		offset += 80
 	}
