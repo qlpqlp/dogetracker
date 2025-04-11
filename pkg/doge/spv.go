@@ -702,15 +702,46 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		// Calculate block hash
 		hash := header.Hash()
 
-		// Calculate height based on our current height
-		height := n.currentHeight + uint32(headersProcessed) + 1
+		// Find the height by looking up the previous block
+		var height uint32
+		genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
+		if err != nil {
+			return fmt.Errorf("error decoding genesis block hash: %v", err)
+		}
+		// Reverse the hash (Dogecoin uses little-endian)
+		for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
+			genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
+		}
+
+		if bytes.Equal(header.PrevBlock[:], genesisHash) {
+			// This is the first block after genesis
+			height = 1
+		} else {
+			// Find the height of the previous block
+			n.headersMutex.RLock()
+			for h, hdr := range n.headers {
+				if bytes.Equal(hdr.Hash()[:], header.PrevBlock[:]) {
+					height = h + 1
+					break
+				}
+			}
+			n.headersMutex.RUnlock()
+		}
+
+		// If we couldn't find the previous block, skip this header
+		if height == 0 {
+			n.logger.Printf("Warning: Could not find previous block for header %x, skipping", hash)
+			continue
+		}
 
 		// Only store headers at or above our start height
 		if height >= n.startHeight {
 			n.logger.Printf("Received header for block %x at height %d", hash, height)
 			n.headersMutex.Lock()
 			n.headers[height] = header
-			n.currentHeight = height
+			if height > n.currentHeight {
+				n.currentHeight = height
+			}
 			n.headersMutex.Unlock()
 			headersProcessed++
 		}
