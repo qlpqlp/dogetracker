@@ -1,9 +1,11 @@
 package doge
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"log"
 	"net"
+	"time"
 )
 
 // Block represents a Dogecoin block
@@ -22,6 +24,14 @@ type BlockHeader struct {
 	Nonce         uint32
 	Height        uint32
 	Confirmations int64
+}
+
+// Hash calculates the double SHA-256 hash of the block header
+func (h *BlockHeader) Hash() []byte {
+	headerBytes := h.Serialize()
+	hash1 := sha256.Sum256(headerBytes)
+	hash2 := sha256.Sum256(hash1[:])
+	return hash2[:]
 }
 
 // Serialize serializes a block header into bytes
@@ -71,9 +81,8 @@ type OutPoint struct {
 	Index uint32
 }
 
-// SPVNode represents a Simplified Payment Verification node
+// SPVNode represents a SPV node
 type SPVNode struct {
-	conn           net.Conn
 	headers        map[uint32]BlockHeader
 	blocks         map[string]*Block
 	peers          []string
@@ -83,6 +92,13 @@ type SPVNode struct {
 	verackReceived chan struct{}
 	db             Database
 	logger         *log.Logger
+	conn           net.Conn
+	connected      bool
+	reconnectDelay time.Duration
+	stopChan       chan struct{}
+	lastMessage    time.Time
+	messageTimeout time.Duration
+	chainParams    *ChainParams
 }
 
 // Database interface for storing blocks and transactions

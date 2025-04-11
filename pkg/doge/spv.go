@@ -57,84 +57,115 @@ func NewSPVNode(peers []string, startHeight uint32, db Database) *SPVNode {
 		verackReceived: make(chan struct{}),
 		db:             db,
 		logger:         log.New(os.Stdout, "SPV: ", log.LstdFlags),
+		connected:      false,
+		lastMessage:    time.Now(),
+		messageTimeout: 30 * time.Second,
+		chainParams:    &MainNetParams,
 	}
 }
 
 // ConnectToPeer connects to a peer
 func (n *SPVNode) ConnectToPeer(peer string) error {
-	log.Printf("Connecting to peer %s...", peer)
+	n.logger.Printf("Connecting to peer %s...", peer)
+
+	// Close existing connection if any
+	if n.conn != nil {
+		n.conn.Close()
+		n.conn = nil
+		n.connected = false
+	}
+
 	// Connect to peer
 	conn, err := net.Dial("tcp", peer)
 	if err != nil {
 		return fmt.Errorf("failed to connect to peer: %v", err)
 	}
 	n.conn = conn
-	log.Printf("Connected to peer %s", peer)
+	n.connected = true
+	n.logger.Printf("Connected to peer %s", peer)
 
 	// Send version message
-	log.Printf("Sending version message...")
+	n.logger.Printf("Sending version message...")
 	if err := n.sendVersionMessage(); err != nil {
 		n.conn.Close()
+		n.conn = nil
+		n.connected = false
 		return fmt.Errorf("failed to send version message: %v", err)
 	}
 
 	// Wait for version message from peer
-	log.Printf("Waiting for version message from peer...")
+	n.logger.Printf("Waiting for version message from peer...")
 	msg, err := n.readMessage()
 	if err != nil {
 		n.conn.Close()
+		n.conn = nil
+		n.connected = false
 		return fmt.Errorf("failed to read version message: %v", err)
 	}
 
 	command := string(bytes.TrimRight(msg.Command[:], "\x00"))
 	if command != MsgVersion {
 		n.conn.Close()
+		n.conn = nil
+		n.connected = false
 		return fmt.Errorf("expected version message, got %s", command)
 	}
 
 	// Handle version message
 	if err := n.handleVersionMessage(msg.Payload); err != nil {
 		n.conn.Close()
+		n.conn = nil
+		n.connected = false
 		return fmt.Errorf("failed to handle version message: %v", err)
 	}
 
 	// Send verack
-	log.Printf("Sending verack...")
+	n.logger.Printf("Sending verack...")
 	if err := n.sendMessage(MsgVerack, nil); err != nil {
 		n.conn.Close()
+		n.conn = nil
+		n.connected = false
 		return fmt.Errorf("failed to send verack: %v", err)
 	}
 
 	// Wait for verack
-	log.Printf("Waiting for verack...")
+	n.logger.Printf("Waiting for verack...")
 	msg, err = n.readMessage()
 	if err != nil {
 		n.conn.Close()
+		n.conn = nil
+		n.connected = false
 		return fmt.Errorf("failed to read verack: %v", err)
 	}
 
 	command = string(bytes.TrimRight(msg.Command[:], "\x00"))
 	if command != MsgVerack {
 		n.conn.Close()
+		n.conn = nil
+		n.connected = false
 		return fmt.Errorf("expected verack message, got %s", command)
 	}
 
 	// Send filter load message
-	log.Printf("Sending filter load message...")
+	n.logger.Printf("Sending filter load message...")
 	if err := n.sendFilterLoadMessage(); err != nil {
 		n.conn.Close()
+		n.conn = nil
+		n.connected = false
 		return fmt.Errorf("failed to send filter load message: %v", err)
 	}
 
 	// Send getheaders message
-	log.Printf("Sending getheaders message...")
+	n.logger.Printf("Sending getheaders message...")
 	if err := n.sendGetHeaders(); err != nil {
 		n.conn.Close()
+		n.conn = nil
+		n.connected = false
 		return fmt.Errorf("failed to send getheaders message: %v", err)
 	}
 
 	// Start message handling goroutine
-	log.Printf("Starting message handling goroutine...")
+	n.logger.Printf("Starting message handling goroutine...")
 	go n.handleMessages()
 
 	return nil
@@ -930,91 +961,88 @@ func (n *SPVNode) parseBlockMessage(payload []byte) (*Block, error) {
 }
 
 // GetBlockTransactions requests and processes transactions for a specific block
-func (n *SPVNode) GetBlockTransactions(blockHash string) ([]Transaction, error) {
-	n.logger.Printf("Requesting transactions for block %s", blockHash)
+func (n *SPVNode) GetBlockTransactions(blockHash string) ([]*Transaction, error) {
+	if !n.connected {
+		return nil, fmt.Errorf("not connected to peer")
+	}
 
 	// Convert block hash to bytes
 	hashBytes, err := hex.DecodeString(blockHash)
 	if err != nil {
-		return nil, fmt.Errorf("invalid block hash: %v", err)
+		return nil, fmt.Errorf("failed to decode block hash: %v", err)
 	}
-	n.logger.Printf("Converted block hash to bytes: %x", hashBytes)
+	if len(hashBytes) != 32 {
+		return nil, fmt.Errorf("invalid block hash length")
+	}
 
 	// Create getdata message payload
-	payload := make([]byte, 0)
-	payload = append(payload, 1) // Number of inventory items
-	payload = append(payload, 2) // Type 2 = block
-	payload = append(payload, hashBytes...)
-	n.logger.Printf("Created getdata message payload: %x", payload)
+	payload := make([]byte, 1+32) // 1 byte for count + 32 bytes for hash
+	payload[0] = 1                // Count of 1
+	copy(payload[1:], hashBytes)
 
 	// Send getdata message
-	n.logger.Println("Sending getdata message...")
-	if err := n.sendMessage("getdata", payload); err != nil {
+	n.logger.Printf("Sending getdata message for block %s", blockHash)
+	if err := n.sendMessage(MsgGetData, payload); err != nil {
+		n.connected = false
 		return nil, fmt.Errorf("failed to send getdata message: %v", err)
 	}
-	n.logger.Println("Getdata message sent successfully")
 
 	// Wait for block message with timeout
-	blockChan := make(chan *Block)
-	errChan := make(chan error)
 	timeout := time.After(30 * time.Second)
-
-	n.logger.Println("Waiting for block or error...")
-	n.logger.Println("Starting goroutine to wait for block message...")
+	blockChan := make(chan *Block)
+	errorChan := make(chan error)
 
 	go func() {
 		for {
-			n.logger.Println("Waiting for next message...")
 			msg, err := n.readMessage()
 			if err != nil {
-				errChan <- fmt.Errorf("failed to read message: %v", err)
+				if err == io.EOF {
+					n.connected = false
+					errorChan <- fmt.Errorf("connection closed by peer")
+					return
+				}
+				errorChan <- fmt.Errorf("failed to read message: %v", err)
 				return
 			}
 
-			n.logger.Printf("Received message of type: %s", msg.Command)
+			command := string(bytes.TrimRight(msg.Command[:], "\x00"))
+			n.logger.Printf("Received message type: %s", command)
 
-			// Check if this is a block message
-			if string(bytes.TrimRight(msg.Command[:], "\x00")) == "block" {
-				n.logger.Println("Received block message, parsing...")
+			if command == MsgBlock {
 				block, err := n.parseBlockMessage(msg.Payload)
 				if err != nil {
-					errChan <- fmt.Errorf("failed to parse block message: %v", err)
+					errorChan <- fmt.Errorf("failed to parse block message: %v", err)
 					return
 				}
 
 				// Verify block hash matches
-				headerBytes := block.Header.Serialize()
-				hash1 := sha256.Sum256(headerBytes)
-				hash2 := sha256.Sum256(hash1[:])
-				if !bytes.Equal(hash2[:], hashBytes) {
-					errChan <- fmt.Errorf("received block hash %x does not match requested hash %x", hash2[:], hashBytes)
+				blockHashBytes := block.Header.Hash()
+				if !bytes.Equal(blockHashBytes, hashBytes) {
+					errorChan <- fmt.Errorf("block hash mismatch")
 					return
 				}
 
 				blockChan <- block
 				return
-			} else {
-				n.logger.Printf("Ignoring non-block message of type: %s", msg.Command)
-				// Handle other message types if needed
-				continue
 			}
 		}
 	}()
 
 	select {
 	case block := <-blockChan:
-		n.logger.Printf("Successfully received block with %d transactions", len(block.Tx))
 		// Filter transactions that match our bloom filter
-		relevantTxs := make([]Transaction, 0)
+		var relevantTxs []*Transaction
 		for _, tx := range block.Tx {
 			if n.isRelevant(tx) {
-				relevantTxs = append(relevantTxs, tx)
+				n.logger.Printf("Found relevant transaction: %s", tx.TxID)
+				relevantTxs = append(relevantTxs, &tx)
 			}
 		}
-		n.logger.Printf("Found %d relevant transactions", len(relevantTxs))
 		return relevantTxs, nil
-	case err := <-errChan:
+
+	case err := <-errorChan:
 		return nil, err
+
 	case <-timeout:
 		return nil, fmt.Errorf("timeout waiting for block message")
 	}
@@ -1236,4 +1264,38 @@ func (n *SPVNode) ProcessTransaction(tx *Transaction) bool {
 		}
 	}
 	return false
+}
+
+// StartConnectionManager manages the connection to peers
+func (n *SPVNode) StartConnectionManager() {
+	go func() {
+		for {
+			select {
+			case <-n.stopChan:
+				return
+			default:
+				if !n.connected {
+					n.logger.Printf("Not connected, attempting to connect to peers...")
+					for _, peer := range n.peers {
+						if err := n.ConnectToPeer(peer); err != nil {
+							n.logger.Printf("Failed to connect to peer %s: %v", peer, err)
+							continue
+						}
+						break
+					}
+				}
+				time.Sleep(n.reconnectDelay)
+			}
+		}
+	}()
+}
+
+// Stop stops the SPV node
+func (n *SPVNode) Stop() {
+	close(n.stopChan)
+	if n.conn != nil {
+		n.conn.Close()
+		n.conn = nil
+	}
+	n.connected = false
 }
