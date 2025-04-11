@@ -52,7 +52,7 @@ type SPVNode struct {
 	bloomFilter        []byte
 	currentHeight      uint32
 	verackReceived     chan struct{}
-	db                 Database
+	db                 BlockDatabase
 	logger             *log.Logger
 	connected          bool
 	lastMessage        time.Time
@@ -80,7 +80,7 @@ type SPVNode struct {
 }
 
 // NewSPVNode creates a new SPV node
-func NewSPVNode(peers []string, startHeight uint32, db Database, logger *log.Logger) (*SPVNode, error) {
+func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase, logger *log.Logger) (*SPVNode, error) {
 	// Initialize chain params with Dogecoin mainnet parameters
 	chainParams := &ChainParams{
 		ChainName:    "mainnet",
