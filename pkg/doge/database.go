@@ -301,26 +301,26 @@ func (d *SQLDatabase) GetBlockHeight(hash string) (uint32, error) {
 }
 
 // GetLastProcessedBlock retrieves the last processed block information
-func (d *SQLDatabase) GetLastProcessedBlock() (string, uint32, string, error) {
+func (d *SQLDatabase) GetLastProcessedBlock() (string, int64, int64, error) {
 	var hash string
-	var height uint32
-	var merkleRoot string
+	var height int64
+	var timestamp int64
 
 	err := d.db.QueryRow(`
-		SELECT hash, height, merkle_root
+		SELECT hash, height, EXTRACT(EPOCH FROM created_at)::bigint
 		FROM blocks
 		ORDER BY height DESC
 		LIMIT 1
-	`).Scan(&hash, &height, &merkleRoot)
+	`).Scan(&hash, &height, &timestamp)
 
 	if err == sql.ErrNoRows {
-		return "", 0, "", nil
+		return "", 0, 0, nil
 	}
 	if err != nil {
-		return "", 0, "", fmt.Errorf("error getting last processed block: %v", err)
+		return "", 0, 0, fmt.Errorf("error getting last processed block: %v", err)
 	}
 
-	return hash, height, merkleRoot, nil
+	return hash, height, timestamp, nil
 }
 
 // UpdateLastProcessedBlock updates the last processed block information
