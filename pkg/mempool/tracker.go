@@ -7,10 +7,13 @@ import (
 	"log"
 	"time"
 
-	"github.com/dogeorg/doge"
+	"github.com/qlpqlp/dogetracker/pkg/doge"
 	"github.com/qlpqlp/dogetracker/pkg/spec"
 	"github.com/qlpqlp/dogetracker/server/db"
 )
+
+// BlockTx is an alias for doge.Transaction
+type BlockTx = doge.Transaction
 
 type MempoolTracker struct {
 	client       spec.Blockchain
