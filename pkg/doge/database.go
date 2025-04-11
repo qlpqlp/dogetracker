@@ -197,7 +197,7 @@ func (d *SQLDatabase) GetBlock(hash string) (*Block, error) {
 			tx.Outputs = append(tx.Outputs, output)
 		}
 
-		block.Transactions = append(block.Transactions, tx)
+		block.Transactions = append(block.Transactions, &tx)
 	}
 
 	return &block, nil
