@@ -688,7 +688,15 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			return fmt.Errorf("error reading transaction count: %v", err)
 		}
 		if txCount != 0 {
-			return fmt.Errorf("invalid transaction count %d in headers message", txCount)
+			n.logger.Printf("Warning: header message contains transaction count %d, expected 0", txCount)
+			// Skip the transaction data if present
+			if txCount > 0 {
+				// Skip the transaction data
+				_, err = reader.Read(make([]byte, txCount))
+				if err != nil {
+					return fmt.Errorf("error skipping transaction data: %v", err)
+				}
+			}
 		}
 
 		// Calculate block hash
@@ -1393,19 +1401,38 @@ func (n *SPVNode) sendGetBlocks() error {
 	// Start with the block at current height
 	if n.currentHeight > 0 {
 		// Find the block hash at current height
-		for h, header := range n.headers {
-			if h == n.currentHeight {
-				// Calculate hash of the header
-				headerBytes := header.Serialize()
-				hash1 := sha256.Sum256(headerBytes)
-				hash2 := sha256.Sum256(hash1[:])
-				payload = append(payload, hash2[:]...)
-				break
+		n.headersMutex.RLock()
+		header, exists := n.headers[n.currentHeight]
+		n.headersMutex.RUnlock()
+
+		if exists {
+			// Calculate hash of the header
+			headerBytes := header.Serialize()
+			hash1 := sha256.Sum256(headerBytes)
+			hash2 := sha256.Sum256(hash1[:])
+			payload = append(payload, hash2[:]...)
+		} else {
+			// If we don't have the header, use genesis block hash
+			genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
+			if err != nil {
+				return fmt.Errorf("failed to decode genesis block hash: %v", err)
 			}
+			// Reverse the hash (Dogecoin uses little-endian)
+			for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
+				genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
+			}
+			payload = append(payload, genesisHash...)
 		}
 	} else {
 		// Start with genesis block hash
-		genesisHash, _ := hex.DecodeString(MainNetParams.GenesisBlock)
+		genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
+		if err != nil {
+			return fmt.Errorf("failed to decode genesis block hash: %v", err)
+		}
+		// Reverse the hash (Dogecoin uses little-endian)
+		for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
+			genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
+		}
 		payload = append(payload, genesisHash...)
 	}
 
@@ -1413,7 +1440,7 @@ func (n *SPVNode) sendGetBlocks() error {
 	stopHash := make([]byte, 32)
 	payload = append(payload, stopHash...)
 
-	log.Printf("Sending getblocks message with payload length: %d", len(payload))
-	log.Printf("Requesting blocks starting from height %d", n.currentHeight)
+	n.logger.Printf("Sending getblocks message with payload length: %d", len(payload))
+	n.logger.Printf("Requesting blocks starting from height %d", n.currentHeight)
 	return n.sendMessage("getblocks", payload)
 }
