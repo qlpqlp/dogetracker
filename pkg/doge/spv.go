@@ -596,11 +596,16 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 	n.logger.Printf("Received %d headers", count)
 
 	// Read each header
+	headersProcessed := 0
 	for i := uint64(0); i < count; i++ {
 		// Check if we have enough bytes left
 		if reader.Len() < 80 { // Minimum size for a header
-			n.logger.Printf("Partial headers message received, waiting for more headers")
-			return nil // Return without error to allow processing of next message
+			n.logger.Printf("Partial headers message received, processed %d headers, requesting more", headersProcessed)
+			// Request more headers from where we left off
+			if err := n.sendGetHeaders(); err != nil {
+				return fmt.Errorf("error requesting more headers: %v", err)
+			}
+			return nil
 		}
 
 		header := BlockHeader{}
@@ -652,15 +657,19 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		// Store header
 		n.headers[height] = header
 		n.currentHeight = height
+		headersProcessed++
 	}
 
 	// If we processed all headers in this message, request more if needed
-	if count > 0 {
-		n.logger.Printf("Processed %d headers, current height: %d", count, n.currentHeight)
+	if headersProcessed > 0 {
+		n.logger.Printf("Processed %d headers, current height: %d", headersProcessed, n.currentHeight)
 		// Request more headers if we haven't reached the target height
 		if n.currentHeight < n.bestKnownHeight {
 			n.logger.Printf("Requesting more headers from height %d", n.currentHeight+1)
 			return n.sendGetHeaders()
+		} else {
+			n.logger.Printf("Reached target height %d", n.currentHeight)
+			n.headerSyncComplete = true
 		}
 	}
 
