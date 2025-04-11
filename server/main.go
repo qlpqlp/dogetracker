@@ -235,6 +235,11 @@ func main() {
 	}
 	defer db.Close()
 
+	// Initialize database schema
+	if err := serverdb.InitDB(db); err != nil {
+		log.Fatalf("Failed to initialize database schema: %v", err)
+	}
+
 	// Create SPV node with specified peer and start block
 	peers := []string{nodeAddr}
 	spvNode := doge.NewSPVNode(peers, uint32(startBlock), doge.NewSQLDatabase(db))
