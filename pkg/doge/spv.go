@@ -599,7 +599,8 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 	for i := uint64(0); i < count; i++ {
 		// Check if we have enough bytes left
 		if reader.Len() < 80 { // Minimum size for a header
-			return fmt.Errorf("not enough bytes left for header %d", i)
+			n.logger.Printf("Partial headers message received, waiting for more headers")
+			return nil // Return without error to allow processing of next message
 		}
 
 		header := BlockHeader{}
@@ -651,6 +652,16 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		// Store header
 		n.headers[height] = header
 		n.currentHeight = height
+	}
+
+	// If we processed all headers in this message, request more if needed
+	if count > 0 {
+		n.logger.Printf("Processed %d headers, current height: %d", count, n.currentHeight)
+		// Request more headers if we haven't reached the target height
+		if n.currentHeight < n.bestKnownHeight {
+			n.logger.Printf("Requesting more headers from height %d", n.currentHeight+1)
+			return n.sendGetHeaders()
+		}
 	}
 
 	return nil
