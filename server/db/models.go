@@ -82,6 +82,24 @@ func InitDB(db *sql.DB) error {
 		return err
 	}
 
+	// Insert genesis block into headers table
+	_, err = db.Exec(`
+		INSERT INTO headers (hash, height, version, prev_block, merkle_root, time, bits, nonce)
+		VALUES (
+			'1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691',
+			0,
+			1,
+			'0000000000000000000000000000000000000000000000000000000000000000',
+			'1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691',
+			1386325540,
+			0x1e0ffff0,
+			99943
+		) ON CONFLICT (hash) DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+
 	// Create tracked_addresses table
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS tracked_addresses (
@@ -168,7 +186,7 @@ func InitDB(db *sql.DB) error {
 	// Insert default row if not exists
 	_, err = db.Exec(`
 		INSERT INTO last_processed_block (id, block_hash, block_height)
-		VALUES (1, '0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f', 0)
+		VALUES (1, '1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691', 0)
 		ON CONFLICT (id) DO NOTHING
 	`)
 
