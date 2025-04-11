@@ -556,12 +556,23 @@ func (n *SPVNode) sendFilterLoadMessage() error {
 
 // sendGetHeaders sends a getheaders message to request headers
 func (n *SPVNode) sendGetHeaders() error {
-	// Create block locator hashes
-	var locatorHashes [][]byte
+	// Create getheaders message payload
+	payload := make([]byte, 0)
 
-	// If we have no headers yet, start from the requested height
-	if len(n.headers) == 0 {
-		// Use genesis block hash from chain params
+	// Version (4 bytes)
+	versionBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(versionBytes, ProtocolVersion)
+	payload = append(payload, versionBytes...)
+
+	// Hash count (varint)
+	payload = append(payload, 0x01) // One hash
+
+	// Block locator hashes (32 bytes)
+	// If we're starting from a specific height and have no headers yet,
+	// we need to request headers from the genesis block
+	if len(n.headers) == 0 && n.startHeight > 0 {
+		n.logger.Printf("Starting from height %d, requesting headers from genesis", n.startHeight)
+		// Use genesis block hash
 		genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
 		if err != nil {
 			return fmt.Errorf("failed to decode genesis block hash: %v", err)
@@ -570,47 +581,54 @@ func (n *SPVNode) sendGetHeaders() error {
 		for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
 			genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
 		}
-		locatorHashes = append(locatorHashes, genesisHash)
+		payload = append(payload, genesisHash...)
 	} else {
-		// Start from current height
-		for height := n.currentHeight; height > 0 && len(locatorHashes) < 10; height-- {
-			if header, exists := n.headers[height]; exists {
-				hash := header.Hash()
-				locatorHashes = append(locatorHashes, hash[:])
+		// Start with the block at current height
+		if n.currentHeight > 0 {
+			// Find the block hash at current height
+			n.headersMutex.RLock()
+			header, exists := n.headers[n.currentHeight]
+			n.headersMutex.RUnlock()
+
+			if exists {
+				// Calculate hash of the header
+				headerBytes := header.Serialize()
+				hash1 := sha256.Sum256(headerBytes)
+				hash2 := sha256.Sum256(hash1[:])
+				payload = append(payload, hash2[:]...)
+			} else {
+				// If we don't have the header, use genesis block hash
+				genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
+				if err != nil {
+					return fmt.Errorf("failed to decode genesis block hash: %v", err)
+				}
+				// Reverse the hash (Dogecoin uses little-endian)
+				for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
+					genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
+				}
+				payload = append(payload, genesisHash...)
 			}
+		} else {
+			// Start with genesis block hash
+			genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
+			if err != nil {
+				return fmt.Errorf("failed to decode genesis block hash: %v", err)
+			}
+			// Reverse the hash (Dogecoin uses little-endian)
+			for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
+				genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
+			}
+			payload = append(payload, genesisHash...)
 		}
-
-		// Always include genesis block hash
-		genesisHeader := n.headers[0]
-		genesisHash := genesisHeader.Hash()
-		locatorHashes = append(locatorHashes, genesisHash[:])
 	}
 
-	// Create payload
-	var payload []byte
-
-	// Protocol version (4 bytes)
-	versionBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(versionBytes, 70015) // Dogecoin protocol version
-	payload = append(payload, versionBytes...)
-
-	// Hash count (varint)
-	hashCount := uint64(len(locatorHashes))
-	hashCountBytes := make([]byte, binary.MaxVarintLen64)
-	bytesWritten := binary.PutUvarint(hashCountBytes, hashCount)
-	payload = append(payload, hashCountBytes[:bytesWritten]...)
-
-	// Block locator hashes
-	for _, hash := range locatorHashes {
-		payload = append(payload, hash...)
-	}
-
-	// Stop hash (32 bytes of zeros to request all headers)
+	// Stop hash (32 bytes) - all zeros to get all headers
 	stopHash := make([]byte, 32)
 	payload = append(payload, stopHash...)
 
-	n.logger.Printf("Sending getheaders message with %d locator hashes, starting from height %d", len(locatorHashes), n.startHeight)
-	return n.sendMessage(MsgGetHeaders, payload)
+	n.logger.Printf("Sending getheaders message with payload length: %d", len(payload))
+	n.logger.Printf("Requesting headers starting from height %d", n.currentHeight)
+	return n.sendMessage("getheaders", payload)
 }
 
 // handleVersionMessage handles a version message
@@ -640,6 +658,12 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 	// Read each header
 	headersProcessed := 0
 	var lastValidHeight uint32 = 0
+
+	// If we're starting from a specific height and have no headers yet,
+	// we need to find the first header that chains to our start height
+	if len(n.headers) == 0 && n.startHeight > 0 {
+		n.logger.Printf("Starting from height %d, looking for first valid header", n.startHeight)
+	}
 
 	for i := uint64(0); i < count; i++ {
 		// Check if we have enough bytes left
