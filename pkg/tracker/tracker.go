@@ -463,9 +463,9 @@ func (t *Tracker) ProcessBlocks(ctx context.Context, startBlock int64) error {
 			// Process each transaction
 			for _, tx := range transactions {
 				// Check if transaction is relevant to watched addresses
-				if t.spvNode.ProcessTransaction(&tx) {
+				if t.spvNode.ProcessTransaction(tx) {
 					// Store transaction in database
-					err = t.storeTransaction(&tx, []string{blockHash})
+					err = t.storeTransaction(tx, []string{blockHash})
 					if err != nil {
 						return fmt.Errorf("error storing transaction %s: %v", tx.TxID, err)
 					}
