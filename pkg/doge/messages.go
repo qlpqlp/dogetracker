@@ -16,8 +16,13 @@ const (
 	MsgVerack     = "verack"
 	MsgHeaders    = "headers"
 	MsgGetHeaders = "getheaders"
+	MsgGetData    = "getdata"
 	MsgBlock      = "block"
-	MsgGetBlocks  = "getblocks"
+	MsgTx         = "tx"
+	MsgInv        = "inv"
+	MsgFilterLoad = "filterload"
+	MsgPing       = "ping"
+	MsgPong       = "pong"
 )
 
 // Message represents a Dogecoin protocol message

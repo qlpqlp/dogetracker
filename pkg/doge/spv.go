@@ -20,31 +20,12 @@ const (
 	// Protocol version
 	ProtocolVersion = 70015
 
-	// Message types
-	MsgVersion    = "version"
-	MsgVerack     = "verack"
-	MsgGetHeaders = "getheaders"
-	MsgHeaders    = "headers"
-	MsgGetData    = "getdata"
-	MsgBlock      = "block"
-	MsgTx         = "tx"
-	MsgInv        = "inv"
-	MsgFilterLoad = "filterload"
-	MsgPing       = "ping"
-	MsgPong       = "pong"
-
 	// MaxMessageSize is the maximum allowed size for a message
 	MaxMessageSize = 32 * 1024 * 1024 // 32MB
 
 	// MaxHeadersResults is the maximum number of headers to request in one getheaders message
 	MaxHeadersResults = 1000
 )
-
-// Message represents a Dogecoin protocol message
-type Message struct {
-	Command [12]byte
-	Payload []byte
-}
 
 // Deserialize reads a block header from a byte slice
 func (h *BlockHeader) Deserialize(data []byte) error {
@@ -90,6 +71,12 @@ type SPVNode struct {
 	targetHeight       uint32
 	done               chan struct{}
 	mu                 sync.Mutex
+	// Additional fields from reference implementation
+	nonce     uint64
+	userAgent string
+	services  uint64
+	relay     bool
+	version   int32
 }
 
 // NewSPVNode creates a new SPV node
@@ -348,214 +335,6 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 	return n.sendMessage(NewMessage(MsgHeaders, payload))
 }
 
-// readMessage reads a message from the connection
-func (n *SPVNode) readMessage() (*Message, error) {
-	// Read message header (24 bytes)
-	header := make([]byte, 24)
-	if _, err := io.ReadFull(n.conn, header); err != nil {
-		return nil, fmt.Errorf("failed to read message header: %v", err)
-	}
-
-	// Parse message length
-	length := binary.LittleEndian.Uint32(header[16:20])
-	if length > MaxMessageSize {
-		return nil, fmt.Errorf("message size %d exceeds maximum allowed size %d", length, MaxMessageSize)
-	}
-
-	// Read message payload
-	payload := make([]byte, length)
-	if length > 0 {
-		if _, err := io.ReadFull(n.conn, payload); err != nil {
-			return nil, fmt.Errorf("failed to read message payload: %v", err)
-		}
-	}
-
-	// Create message
-	msg := &Message{
-		Command: [12]byte{},
-		Payload: payload,
-	}
-	copy(msg.Command[:], header[4:16])
-
-	// Verify checksum
-	hash1 := sha256.Sum256(payload)
-	hash2 := sha256.Sum256(hash1[:])
-	if !bytes.Equal(hash2[:4], header[20:24]) {
-		return nil, fmt.Errorf("invalid message checksum")
-	}
-
-	return msg, nil
-}
-
-// sendMessage sends a message to the peer
-func (n *SPVNode) sendMessage(msg *Message) error {
-	if n.conn == nil {
-		return fmt.Errorf("not connected")
-	}
-
-	// Write message
-	if err := binary.Write(n.conn, binary.LittleEndian, msg.Command); err != nil {
-		return err
-	}
-
-	// Write payload length
-	payloadLen := uint32(len(msg.Payload))
-	if err := binary.Write(n.conn, binary.LittleEndian, payloadLen); err != nil {
-		return err
-	}
-
-	// Write payload
-	if _, err := n.conn.Write(msg.Payload); err != nil {
-		return err
-	}
-
-	n.lastMessage = time.Now()
-	return nil
-}
-
-// sendVersionMessage sends a version message
-func (n *SPVNode) sendVersionMessage() error {
-	// Create version message payload
-	payload := make([]byte, 86) // Version message size
-	binary.LittleEndian.PutUint32(payload[0:4], ProtocolVersion)
-
-	// Services (8 bytes) - NODE_NETWORK
-	binary.LittleEndian.PutUint64(payload[4:12], 1)
-
-	// Timestamp (8 bytes)
-	binary.LittleEndian.PutUint64(payload[12:20], uint64(time.Now().Unix()))
-
-	// Receiver services (8 bytes)
-	binary.LittleEndian.PutUint64(payload[20:28], 1)
-
-	// Receiver IP (16 bytes) - IPv4 mapped to IPv6
-	payload[28] = 0x00
-	payload[29] = 0x00
-	payload[30] = 0x00
-	payload[31] = 0x00
-	payload[32] = 0x00
-	payload[33] = 0x00
-	payload[34] = 0x00
-	payload[35] = 0x00
-	payload[36] = 0x00
-	payload[37] = 0x00
-	payload[38] = 0xFF
-	payload[39] = 0xFF
-	payload[40] = 0x00
-	payload[41] = 0x00
-	payload[42] = 0x00
-	payload[43] = 0x00
-
-	// Receiver port (2 bytes)
-	binary.BigEndian.PutUint16(payload[44:46], 22556)
-
-	// Sender services (8 bytes)
-	binary.LittleEndian.PutUint64(payload[46:54], 1)
-
-	// Sender IP (16 bytes) - IPv4 mapped to IPv6
-	payload[54] = 0x00
-	payload[55] = 0x00
-	payload[56] = 0x00
-	payload[57] = 0x00
-	payload[58] = 0x00
-	payload[59] = 0x00
-	payload[60] = 0x00
-	payload[61] = 0x00
-	payload[62] = 0x00
-	payload[63] = 0x00
-	payload[64] = 0xFF
-	payload[65] = 0xFF
-	payload[66] = 0x00
-	payload[67] = 0x00
-	payload[68] = 0x00
-	payload[69] = 0x00
-
-	// Sender port (2 bytes)
-	binary.BigEndian.PutUint16(payload[70:72], 22556)
-
-	// Nonce (8 bytes)
-	binary.LittleEndian.PutUint64(payload[72:80], uint64(time.Now().UnixNano()))
-
-	// User agent length (varint)
-	payload[80] = 0x00
-
-	// Start height (4 bytes)
-	binary.LittleEndian.PutUint32(payload[82:86], 0)
-
-	return n.sendMessage(NewMessage(MsgVersion, payload))
-}
-
-// sendFilterLoadMessage sends a filter load message
-func (n *SPVNode) sendFilterLoadMessage() error {
-	// Create bloom filter
-	n.updateBloomFilter()
-
-	// Create filter load message payload
-	payload := make([]byte, 0)
-
-	// Filter size (varint)
-	payload = append(payload, byte(len(n.bloomFilter)))
-
-	// Filter data
-	payload = append(payload, n.bloomFilter...)
-
-	// Number of hash functions (4 bytes)
-	binary.LittleEndian.PutUint32(payload[len(payload):len(payload)+4], 11)
-
-	// Tweak (4 bytes)
-	binary.LittleEndian.PutUint32(payload[len(payload):len(payload)+4], uint32(time.Now().UnixNano()))
-
-	// Flags (1 byte)
-	payload = append(payload, 0x01) // BLOOM_UPDATE_ALL
-
-	return n.sendMessage(NewMessage(MsgFilterLoad, payload))
-}
-
-// sendGetHeaders sends a getheaders message to request block headers
-func (n *SPVNode) sendGetHeaders(startHash string) error {
-	// Get last processed block info
-	lastHash, lastHeight, _, err := n.db.GetLastProcessedBlock()
-	if err != nil {
-		return fmt.Errorf("error getting last processed block: %v", err)
-	}
-
-	// Build block locator hashes
-	locatorHashes := [][]byte{}
-	if lastHeight > 0 {
-		// Start from last processed block
-		hashBytes, err := hex.DecodeString(lastHash)
-		if err != nil {
-			return fmt.Errorf("error decoding block hash: %v", err)
-		}
-		locatorHashes = append(locatorHashes, hashBytes)
-	} else {
-		// Start from genesis block
-		genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
-		if err != nil {
-			return fmt.Errorf("error decoding genesis hash: %v", err)
-		}
-		locatorHashes = append(locatorHashes, genesisHash)
-	}
-
-	// Build getheaders message
-	payload := make([]byte, 0)
-	payload = append(payload, uint32ToBytes(70015)...) // Protocol version
-	payload = append(payload, uint8ToBytes(1)...)      // Hash count (always 1 for SPV)
-	payload = append(payload, locatorHashes[0]...)     // Block locator hash
-	payload = append(payload, make([]byte, 32)...)     // Stop hash (all zeros)
-
-	msg := NewMessage("getheaders", payload)
-
-	// Send message to all peers
-	for _, peer := range n.peers {
-		if err := n.sendMessage(msg); err != nil {
-			log.Printf("Error sending getheaders to peer %s: %v", peer, err)
-		}
-	}
-
-	return nil
-}
-
 // handleVersionMessage handles a version message
 func (n *SPVNode) handleVersionMessage(payload []byte) error {
 	// Parse version message
@@ -574,6 +353,12 @@ func (n *SPVNode) handleHeadersMessage(msg *Message) error {
 	count, err := ReadVarInt(msg.Payload)
 	if err != nil {
 		return fmt.Errorf("error reading headers count: %v", err)
+	}
+
+	// Process only first 5 headers
+	if count > 5 {
+		count = 5
+		n.logger.Printf("Limiting to first 5 headers for testing")
 	}
 
 	// Process each header
@@ -602,13 +387,18 @@ func (n *SPVNode) handleHeadersMessage(msg *Message) error {
 			return fmt.Errorf("error storing header: %v", err)
 		}
 
+		// Request block to get transactions
+		blockHash := hex.EncodeToString(header.PrevBlock[:])
+		n.logger.Printf("Requesting block %s at height %d", blockHash, header.Height)
+		if err := n.sendGetDataMessage(2, header.PrevBlock); err != nil {
+			n.logger.Printf("Error requesting block: %v", err)
+		}
+
 		offset += 80
 	}
 
-	// Request more headers if needed
-	if n.currentHeight < n.targetHeight {
-		return n.sendGetHeaders(n.chainParams.GenesisBlock)
-	}
+	// Log completion
+	n.logger.Printf("Processed %d headers", count)
 
 	return nil
 }
@@ -629,41 +419,9 @@ func (n *SPVNode) handleBlockMessage(payload []byte) error {
 
 	n.logger.Printf("Processing block %s at height %d", blockHash, block.Header.Height)
 
-	// Store block in memory
-	n.blocks[blockHash] = block
-
-	// Store block in database
-	if err := n.db.StoreBlock(block); err != nil {
-		n.logger.Printf("Error storing block in database: %v", err)
-		return fmt.Errorf("error storing block in database: %v", err)
-	}
-	n.logger.Printf("Successfully stored block %s in database", blockHash)
-
-	// Process transactions
-	relevantTxs := 0
-	for _, tx := range block.Transactions {
-		if n.ProcessTransaction(tx) {
-			n.logger.Printf("Found relevant transaction %s", tx.TxID)
-			// Store transaction in database
-			if err := n.db.StoreTransaction(tx, blockHash, n.currentHeight); err != nil {
-				n.logger.Printf("Error storing transaction %s in database: %v", tx.TxID, err)
-				continue
-			}
-			relevantTxs++
-		}
-	}
-	n.logger.Printf("Processed %d relevant transactions in block %s", relevantTxs, blockHash)
-
-	// Check if we've reached the best known height
-	if block.Header.Height >= n.bestKnownHeight-5 {
-		n.logger.Printf("Block sync complete at height %d", block.Header.Height)
-		n.blockSyncComplete = true
-	} else {
-		// Request next block
-		n.logger.Printf("Requesting next block after %d", block.Header.Height)
-		if err := n.sendGetBlocks(); err != nil {
-			return fmt.Errorf("error requesting next block: %v", err)
-		}
+	// Log transactions
+	for i, tx := range block.Transactions {
+		n.logger.Printf("Transaction %d in block %s: %s", i, blockHash, tx.TxID)
 	}
 
 	return nil
