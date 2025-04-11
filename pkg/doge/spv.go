@@ -554,35 +554,20 @@ func (n *SPVNode) sendGetHeaders() error {
 	binary.LittleEndian.PutUint32(versionBytes, ProtocolVersion)
 	payload = append(payload, versionBytes...)
 
-	// Hash count (varint)
-	payload = append(payload, 0x01) // One hash
+	// Hash count (varint) - always 1 for SPV
+	payload = append(payload, 0x01)
 
 	// Block locator hashes (32 bytes)
-	// Start with the block at current height
-	if n.currentHeight > 0 {
-		// Find the block hash at current height
-		for h, header := range n.headers {
-			if h == n.currentHeight {
-				// Calculate hash of the header
-				headerBytes := header.Serialize()
-				hash1 := sha256.Sum256(headerBytes)
-				hash2 := sha256.Sum256(hash1[:])
-				payload = append(payload, hash2[:]...)
-				break
-			}
-		}
-	} else {
-		// Start with genesis block hash
-		genesisHash, _ := hex.DecodeString(MainNetParams.GenesisBlock)
-		payload = append(payload, genesisHash...)
-	}
+	// Start with the genesis block hash
+	genesisHash, _ := hex.DecodeString(MainNetParams.GenesisBlock)
+	payload = append(payload, genesisHash...)
 
 	// Stop hash (32 bytes) - all zeros to get all headers
 	stopHash := make([]byte, 32)
 	payload = append(payload, stopHash...)
 
-	log.Printf("Sending getheaders message with payload length: %d", len(payload))
-	log.Printf("Requesting headers starting from height %d", n.currentHeight)
+	n.logger.Printf("Sending getheaders message with payload length: %d", len(payload))
+	n.logger.Printf("Requesting headers starting from height %d", n.currentHeight)
 	return n.sendMessage(MsgGetHeaders, payload)
 }
 
