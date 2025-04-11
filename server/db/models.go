@@ -46,8 +46,44 @@ type UnspentOutput struct {
 
 // InitDB initializes the database schema
 func InitDB(db *sql.DB) error {
-	// Create tracked_addresses table
+	// Create blocks table
 	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS blocks (
+			hash VARCHAR(64) PRIMARY KEY,
+			height BIGINT NOT NULL,
+			version INTEGER NOT NULL,
+			prev_block VARCHAR(64) NOT NULL,
+			merkle_root VARCHAR(64) NOT NULL,
+			time BIGINT NOT NULL,
+			bits INTEGER NOT NULL,
+			nonce INTEGER NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Create headers table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS headers (
+			hash VARCHAR(64) PRIMARY KEY,
+			height BIGINT NOT NULL,
+			version INTEGER NOT NULL,
+			prev_block VARCHAR(64) NOT NULL,
+			merkle_root VARCHAR(64) NOT NULL,
+			time BIGINT NOT NULL,
+			bits INTEGER NOT NULL,
+			nonce INTEGER NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Create tracked_addresses table
+	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS tracked_addresses (
 			id SERIAL PRIMARY KEY,
 			address VARCHAR(34) UNIQUE NOT NULL,
@@ -108,6 +144,8 @@ func InitDB(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_transactions_tx_id ON transactions(tx_id);
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_address_id ON unspent_outputs(address_id);
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_tx_id ON unspent_outputs(tx_id);
+		CREATE INDEX IF NOT EXISTS idx_blocks_height ON blocks(height);
+		CREATE INDEX IF NOT EXISTS idx_headers_height ON headers(height);
 	`)
 
 	if err != nil {
