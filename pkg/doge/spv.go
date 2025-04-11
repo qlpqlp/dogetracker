@@ -86,6 +86,16 @@ func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase) *SPVNode {
 		lastBlockHeight = int64(startHeight)
 	}
 
+	// Initialize chain params with Dogecoin mainnet parameters
+	chainParams := &ChainParams{
+		ChainName:    "mainnet",
+		GenesisBlock: "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691",
+		DefaultPort:  22556,
+		RPCPort:      22555,
+		DNSSeeds:     []string{"seed.dogecoin.com", "seed.multidoge.org", "seed.dogechain.info"},
+		Checkpoints:  make(map[int]string),
+	}
+
 	return &SPVNode{
 		peers:              peers,
 		headers:            make(map[uint32]BlockHeader),
@@ -98,6 +108,9 @@ func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase) *SPVNode {
 		headerSyncComplete: false,
 		blockSyncComplete:  false,
 		logger:             log.New(log.Writer(), "SPV: ", log.LstdFlags),
+		chainParams:        chainParams,
+		stopChan:           make(chan struct{}),
+		reconnectDelay:     5 * time.Second,
 	}
 }
 
