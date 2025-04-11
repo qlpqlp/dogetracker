@@ -597,6 +597,11 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 
 	// Read each header
 	for i := uint64(0); i < count; i++ {
+		// Check if we have enough bytes left
+		if reader.Len() < 80 { // Minimum size for a header
+			return fmt.Errorf("not enough bytes left for header %d", i)
+		}
+
 		header := BlockHeader{}
 
 		// Version (4 bytes)
@@ -630,17 +635,22 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		}
 
 		// Transaction count (varint) - should be 0 for headers message
-		if _, err := binary.ReadUvarint(reader); err != nil {
+		txCount, err := binary.ReadUvarint(reader)
+		if err != nil {
 			return fmt.Errorf("error reading transaction count: %v", err)
+		}
+		if txCount != 0 {
+			return fmt.Errorf("invalid transaction count %d in headers message", txCount)
 		}
 
 		// Calculate block hash
 		hash := header.Hash()
-		n.logger.Printf("Received header for block %x at height %d", hash, len(n.headers))
+		height := uint32(len(n.headers))
+		n.logger.Printf("Received header for block %x at height %d", hash, height)
 
 		// Store header
-		n.headers[uint32(len(n.headers))] = header
-		n.currentHeight = uint32(len(n.headers) - 1)
+		n.headers[height] = header
+		n.currentHeight = height
 	}
 
 	return nil
