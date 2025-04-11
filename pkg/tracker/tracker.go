@@ -333,13 +333,12 @@ func ChainFromName(chainName string) (*doge.ChainParams, error) {
 }
 
 func (c *DogeTracker) processBlock(block *ChainBlock) {
-	log.Printf("Starting to process block %d with %d transactions", block.Height, len(block.Block.Tx))
-	for i, tx := range block.Block.Tx {
-		log.Printf("Processing %d/%d: %s", i+1, len(block.Block.Tx), tx.TxID)
+	log.Printf("Starting to process block %d with %d transactions", block.Height, len(block.Block.Transactions))
+	for i, tx := range block.Block.Transactions {
+		log.Printf("Processing %d/%d: %s", i+1, len(block.Block.Transactions), tx.TxID)
 
-		// Check if this is a coinbase transaction
-		isCoinbase := len(tx.Inputs) > 0 && len(tx.Inputs[0].PreviousOutput.Hash) == 0
-		if isCoinbase {
+		// Skip coinbase transactions
+		if len(tx.Inputs) > 0 && len(tx.Inputs[0].ScriptSig) == 0 {
 			log.Printf("Transaction %s is a coinbase transaction", tx.TxID)
 			continue
 		}
