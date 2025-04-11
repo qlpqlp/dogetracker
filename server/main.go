@@ -109,8 +109,8 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 		log.Printf("Processing transaction %d/%d: %s", i+1, len(txs), tx.TxID)
 
 		// Check if any of the tracked addresses are involved in this transaction
-		if spvNode.ProcessTransaction(&tx) {
-			// Found a transaction involving a tracked address
+		if spvNode.ProcessTransaction(tx) {
+			// Found a transaction involving tracked address
 			log.Printf("Found transaction involving tracked address")
 
 			// Store transaction in database
