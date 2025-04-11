@@ -314,11 +314,11 @@ func (d *SQLDatabase) StoreHeader(header BlockHeader, height uint32) error {
 
 	// Store block header
 	_, err := d.db.Exec(`
-		INSERT INTO blocks (hash, height, version, prev_block, merkle_root, time, bits, nonce)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (hash) DO NOTHING
-	`, blockHash, height, header.Version, header.PrevBlock[:],
-		header.MerkleRoot[:], header.Time, header.Bits, header.Nonce)
+		INSERT INTO headers (hash, height, header)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (hash) DO UPDATE
+		SET height = $2, header = $3
+	`, blockHash, height, headerBytes)
 	if err != nil {
 		return fmt.Errorf("error storing block header: %v", err)
 	}
