@@ -639,6 +639,8 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 
 	// Read each header
 	headersProcessed := 0
+	var lastValidHeight uint32 = 0
+
 	for i := uint64(0); i < count; i++ {
 		// Check if we have enough bytes left
 		if reader.Len() < 80 { // Minimum size for a header
@@ -728,7 +730,18 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			n.headersMutex.RUnlock()
 		}
 
-		// If we couldn't find the previous block, skip this header
+		// If we couldn't find the previous block, try to find it in the current batch
+		if height == 0 && lastValidHeight > 0 {
+			// Check if this header's previous block is the last valid header we processed
+			n.headersMutex.RLock()
+			lastHeader, exists := n.headers[lastValidHeight]
+			n.headersMutex.RUnlock()
+			if exists && bytes.Equal(lastHeader.Hash()[:], header.PrevBlock[:]) {
+				height = lastValidHeight + 1
+			}
+		}
+
+		// If we still couldn't find the previous block, skip this header
 		if height == 0 {
 			n.logger.Printf("Warning: Could not find previous block for header %x, skipping", hash)
 			continue
@@ -742,6 +755,7 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			if height > n.currentHeight {
 				n.currentHeight = height
 			}
+			lastValidHeight = height
 			n.headersMutex.Unlock()
 			headersProcessed++
 		}
