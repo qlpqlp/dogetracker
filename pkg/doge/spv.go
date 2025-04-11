@@ -71,7 +71,7 @@ type SPVNode struct {
 	bloomFilter        []byte
 	currentHeight      uint32
 	verackReceived     chan struct{}
-	db                 BlockDatabase
+	db                 Database
 	logger             *log.Logger
 	connected          bool
 	lastMessage        time.Time
@@ -91,7 +91,7 @@ type SPVNode struct {
 }
 
 // NewSPVNode creates a new SPV node
-func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase) *SPVNode {
+func NewSPVNode(peers []string, startHeight uint32, db Database) *SPVNode {
 	// Initialize chain params with Dogecoin mainnet parameters
 	chainParams := &ChainParams{
 		ChainName:    "mainnet",
@@ -142,7 +142,7 @@ func (n *SPVNode) loadHeadersFromDB() error {
 	n.headersMutex.Lock()
 	defer n.headersMutex.Unlock()
 	for _, header := range headers {
-		n.headers[header.Height] = header
+		n.headers[header.Height] = *header
 		if header.Height > n.currentHeight {
 			n.currentHeight = header.Height
 		}
