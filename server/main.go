@@ -91,7 +91,7 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 
 	// Connect to a peer
 	for _, peer := range peers {
-		if err := spvNode.ConnectToPeer(peer); err != nil {
+		if err := spvNode.Connect(peer); err != nil {
 			log.Printf("Failed to connect to %s: %v", peer, err)
 			continue
 		}
@@ -245,13 +245,16 @@ func main() {
 
 	// Create SPV node with specified peer and start block
 	peers := []string{nodeAddr}
-	spvNode := doge.NewSPVNode(peers, uint32(startBlock), doge.NewSQLDatabase(db))
+	spvNode, err := doge.NewSPVNode(peers, uint32(startBlock), doge.NewSQLDatabase(db), log.New(os.Stdout, "SPV: ", log.LstdFlags))
+	if err != nil {
+		log.Fatalf("Failed to create SPV node: %v", err)
+	}
 
 	log.Printf("Attempting to connect to Dogecoin node at %s...", nodeAddr)
 	log.Printf("Starting from block height %d", startBlock)
 
 	// Connect to peer
-	if err := spvNode.ConnectToPeer(nodeAddr); err != nil {
+	if err := spvNode.Connect(nodeAddr); err != nil {
 		log.Fatalf("Failed to connect to peer: %v", err)
 	}
 	log.Printf("Successfully connected to peer")

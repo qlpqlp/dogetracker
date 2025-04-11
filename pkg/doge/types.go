@@ -78,17 +78,6 @@ type OutPoint struct {
 	Index uint32
 }
 
-// Database interface for storing blocks and transactions
-type Database interface {
-	StoreBlock(block *Block) error
-	StoreTransaction(tx *Transaction, blockHash string, blockHeight uint32) error
-	GetBlock(hash string) (*Block, error)
-	GetTransaction(txid string) (*Transaction, error)
-	GetBlockHeight(hash string) (uint32, error)
-	GetLastProcessedBlock() (string, int64, int64, error)
-	GetHeaders() ([]*BlockHeader, error)
-}
-
 // Blockchain represents a connection to a Dogecoin node
 type Blockchain interface {
 	GetBlockHash(height int64) (string, error)
