@@ -169,6 +169,7 @@ func (n *SPVNode) Start() error {
 	if err := n.sendVersionMessage(); err != nil {
 		return fmt.Errorf("error sending version message: %v", err)
 	}
+	n.logger.Printf("Sent version message")
 
 	// Wait for version handshake to complete
 	select {
@@ -176,11 +177,6 @@ func (n *SPVNode) Start() error {
 		n.logger.Println("Version handshake completed")
 	case <-time.After(10 * time.Second):
 		return fmt.Errorf("timeout waiting for version handshake")
-	}
-
-	// Start header synchronization
-	if err := n.startHeaderSync(); err != nil {
-		return fmt.Errorf("error starting header sync: %v", err)
 	}
 
 	return nil
@@ -242,11 +238,19 @@ func (n *SPVNode) handleMessages() {
 
 		switch command {
 		case MsgVersion:
+			n.logger.Printf("Received version message")
 			if err := n.handleVersionMessage(msg.Payload); err != nil {
 				n.logger.Printf("Error handling version message: %v", err)
+				return
 			}
 		case MsgVerack:
-			n.verackReceived <- struct{}{}
+			n.logger.Printf("Received verack message")
+			select {
+			case n.verackReceived <- struct{}{}:
+				n.logger.Printf("Sent verack signal")
+			default:
+				n.logger.Printf("No one waiting for verack")
+			}
 		case MsgHeaders:
 			n.logger.Printf("Received headers message")
 			if err := n.handleHeadersMessage(msg); err != nil {
@@ -284,7 +288,7 @@ func (n *SPVNode) handleMessages() {
 			// Acknowledge feefilter message but don't send verack
 			n.logger.Printf("Received feefilter message")
 		default:
-			n.logger.Printf("Ignoring unknown message type: %s", command)
+			n.logger.Printf("Received unknown message type: %s", command)
 		}
 	}
 }
@@ -387,18 +391,21 @@ func (n *SPVNode) handleVersionMessage(payload []byte) error {
 		return fmt.Errorf("peer version %d is too old", version)
 	}
 
+	n.logger.Printf("Peer version: %d", version)
+
 	// Send verack
 	if err := n.sendVerackMessage(); err != nil {
 		return fmt.Errorf("error sending verack: %v", err)
 	}
+	n.logger.Printf("Sent verack message")
 
 	// Wait for verack response
 	select {
 	case <-n.verackReceived:
-		// Send getheaders message starting from genesis block
-		genesisHash := "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691" // Dogecoin genesis block hash
-		if err := n.sendGetHeaders(genesisHash); err != nil {
-			return fmt.Errorf("error sending getheaders: %v", err)
+		n.logger.Printf("Version handshake completed")
+		// Start header synchronization
+		if err := n.startHeaderSync(); err != nil {
+			return fmt.Errorf("error starting header sync: %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		return fmt.Errorf("timeout waiting for verack response")
