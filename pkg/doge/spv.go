@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/big"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -69,6 +70,7 @@ type SPVNode struct {
 	headerSyncComplete bool
 	blockSyncComplete  bool
 	startHeight        uint32
+	headersMutex       sync.RWMutex
 }
 
 // NewSPVNode creates a new SPV node
@@ -698,8 +700,10 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		// Only store headers at or above our start height
 		if height >= n.startHeight {
 			n.logger.Printf("Received header for block %x at height %d", hash, height)
+			n.headersMutex.Lock()
 			n.headers[height] = header
 			n.currentHeight = height
+			n.headersMutex.Unlock()
 			headersProcessed++
 		}
 	}
@@ -714,6 +718,9 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		} else {
 			n.logger.Printf("Reached target height %d", n.currentHeight)
 			n.headerSyncComplete = true
+			// Start requesting blocks
+			n.logger.Printf("Header sync complete, starting block download from height %d", n.startHeight)
+			return n.sendGetBlocks()
 		}
 	}
 
@@ -734,31 +741,40 @@ func (n *SPVNode) handleBlockMessage(payload []byte) error {
 	hash2 := sha256.Sum256(hash1[:])
 	blockHash := hex.EncodeToString(hash2[:])
 
+	n.logger.Printf("Processing block %s at height %d", blockHash, block.Header.Height)
+
 	// Store block in memory
 	n.blocks[blockHash] = block
 
 	// Store block in database
 	if err := n.db.StoreBlock(block); err != nil {
-		log.Printf("Error storing block in database: %v", err)
+		n.logger.Printf("Error storing block in database: %v", err)
+		return fmt.Errorf("error storing block in database: %v", err)
 	}
+	n.logger.Printf("Successfully stored block %s in database", blockHash)
 
 	// Process transactions
+	relevantTxs := 0
 	for _, tx := range block.Transactions {
 		if n.ProcessTransaction(tx) {
-			log.Printf("Found relevant transaction")
+			n.logger.Printf("Found relevant transaction %s", tx.TxID)
 			// Store transaction in database
 			if err := n.db.StoreTransaction(tx, blockHash, block.Header.Height); err != nil {
-				log.Printf("Error storing transaction in database: %v", err)
+				n.logger.Printf("Error storing transaction %s in database: %v", tx.TxID, err)
+				continue
 			}
+			relevantTxs++
 		}
 	}
+	n.logger.Printf("Processed %d relevant transactions in block %s", relevantTxs, blockHash)
 
 	// Check if we've reached the best known height
 	if block.Header.Height >= n.bestKnownHeight-5 {
-		log.Printf("Block sync complete")
+		n.logger.Printf("Block sync complete at height %d", block.Header.Height)
 		n.blockSyncComplete = true
 	} else {
 		// Request next block
+		n.logger.Printf("Requesting next block after %d", block.Header.Height)
 		if err := n.sendGetBlocks(); err != nil {
 			return fmt.Errorf("error requesting next block: %v", err)
 		}
@@ -842,13 +858,16 @@ func (n *SPVNode) GetBlockCount() (int64, error) {
 	}
 	// In a real implementation, this would query the peer for the current height
 	// For now, return the current height from our headers
+	n.headersMutex.RLock()
+	defer n.headersMutex.RUnlock()
+
 	var maxHeight uint32
 	for height := range n.headers {
 		if height > maxHeight {
 			maxHeight = height
 		}
 	}
-	log.Printf("Current block height: %d", maxHeight)
+	n.logger.Printf("Current block height: %d", maxHeight)
 	return int64(maxHeight), nil
 }
 
