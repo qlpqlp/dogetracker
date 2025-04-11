@@ -691,7 +691,9 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 
 		// Calculate block hash
 		hash := header.Hash()
-		height := uint32(len(n.headers))
+
+		// Calculate height based on our current height
+		height := n.currentHeight + uint32(headersProcessed) + 1
 
 		// Only store headers at or above our start height
 		if height >= n.startHeight {
