@@ -768,7 +768,7 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			// This is the first block after genesis
 			height = 1
 		} else {
-			// Find the height of the previous block
+			// First check in memory
 			n.headersMutex.RLock()
 			for h, hdr := range n.headers {
 				if bytes.Equal(hdr.Hash()[:], header.PrevBlock[:]) {
@@ -777,6 +777,15 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 				}
 			}
 			n.headersMutex.RUnlock()
+
+			// If not found in memory, check database
+			if height == 0 {
+				prevHash := hex.EncodeToString(header.PrevBlock[:])
+				prevHeight, err := n.db.GetBlockHeight(prevHash)
+				if err == nil {
+					height = prevHeight + 1
+				}
+			}
 		}
 
 		// If we couldn't find the previous block, try to find it in the current batch
