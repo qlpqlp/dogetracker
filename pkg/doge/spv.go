@@ -598,113 +598,65 @@ func (n *SPVNode) handleVersionMessage(payload []byte) error {
 	return n.sendMessage(MsgVerack, nil)
 }
 
-// handleHeadersMessage handles a headers message from the peer
+// handleHeadersMessage handles a headers message
 func (n *SPVNode) handleHeadersMessage(payload []byte) error {
-	log.Printf("Received headers message with payload length: %d", len(payload))
-
-	// Parse headers count (varint)
 	reader := bytes.NewReader(payload)
+
+	// Read headers count (varint)
 	count, err := binary.ReadUvarint(reader)
 	if err != nil {
 		return fmt.Errorf("error reading headers count: %v", err)
 	}
-	log.Printf("Headers count: %d", count)
 
-	// Parse each header
+	n.logger.Printf("Received %d headers", count)
+
+	// Read each header
 	for i := uint64(0); i < count; i++ {
 		header := BlockHeader{}
 
 		// Version (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Version); err != nil {
-			if err == io.EOF && i == count-1 {
-				// EOF at the end of the last header is expected
-				break
-			}
 			return fmt.Errorf("error reading header version: %v", err)
 		}
 
 		// Previous block hash (32 bytes)
 		if _, err := reader.Read(header.PrevBlock[:]); err != nil {
-			if err == io.EOF && i == count-1 {
-				break
-			}
 			return fmt.Errorf("error reading previous block hash: %v", err)
 		}
 
 		// Merkle root (32 bytes)
 		if _, err := reader.Read(header.MerkleRoot[:]); err != nil {
-			if err == io.EOF && i == count-1 {
-				break
-			}
 			return fmt.Errorf("error reading merkle root: %v", err)
 		}
 
 		// Time (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Time); err != nil {
-			if err == io.EOF && i == count-1 {
-				break
-			}
-			return fmt.Errorf("error reading header time: %v", err)
+			return fmt.Errorf("error reading time: %v", err)
 		}
 
 		// Bits (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Bits); err != nil {
-			if err == io.EOF && i == count-1 {
-				break
-			}
-			return fmt.Errorf("error reading header bits: %v", err)
+			return fmt.Errorf("error reading bits: %v", err)
 		}
 
 		// Nonce (4 bytes)
 		if err := binary.Read(reader, binary.LittleEndian, &header.Nonce); err != nil {
-			if err == io.EOF && i == count-1 {
-				break
-			}
-			return fmt.Errorf("error reading header nonce: %v", err)
+			return fmt.Errorf("error reading nonce: %v", err)
 		}
 
-		// Transaction count (varint) - should be 0 for headers message
+		// Transaction count (varint)
 		txCount, err := binary.ReadUvarint(reader)
 		if err != nil {
-			if err == io.EOF && i == count-1 {
-				break
-			}
 			return fmt.Errorf("error reading transaction count: %v", err)
 		}
-		if txCount != 0 {
-			return fmt.Errorf("invalid transaction count in headers message: %d", txCount)
-		}
 
-		// Calculate height based on start height
-		header.Height = n.currentHeight + uint32(i)
-		log.Printf("Storing header at height %d", header.Height)
+		// Calculate block hash
+		hash := header.Hash()
+		n.logger.Printf("Received header for block %x at height %d", hash, len(n.headers))
 
 		// Store header
-		n.headers[header.Height] = header
-
-		// Update current height if this is the highest header
-		if header.Height > n.currentHeight {
-			n.currentHeight = header.Height
-			n.chainTip = &header
-			log.Printf("Updated current height to %d", n.currentHeight)
-		}
-	}
-
-	// Check if we've reached the best known height
-	if n.currentHeight >= n.bestKnownHeight-5 {
-		log.Printf("Header sync complete, switching to block sync")
-		n.headerSyncComplete = true
-		n.blockSyncComplete = false
-		// Start block sync
-		if err := n.sendGetBlocks(); err != nil {
-			return fmt.Errorf("error starting block sync: %v", err)
-		}
-	} else if count == MaxHeadersResults {
-		// Request more headers
-		log.Printf("Requesting more headers from height %d", n.currentHeight)
-		if err := n.sendGetHeaders(); err != nil {
-			return fmt.Errorf("error requesting more headers: %v", err)
-		}
+		n.headers[uint32(len(n.headers))] = header
+		n.currentHeight = uint32(len(n.headers) - 1)
 	}
 
 	return nil
