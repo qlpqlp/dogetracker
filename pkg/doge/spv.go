@@ -163,11 +163,21 @@ func (n *SPVNode) ConnectToPeer(peer string) error {
 		n.connected = false
 	}
 
+	// Set connection timeout
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+	}
+
 	// Connect to peer
-	conn, err := net.Dial("tcp", peer)
+	conn, err := dialer.Dial("tcp", peer)
 	if err != nil {
 		return fmt.Errorf("failed to connect to peer: %v", err)
 	}
+
+	// Set read and write timeouts
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+
 	n.conn = conn
 	n.connected = true
 	n.logger.Printf("Connected to peer %s", peer)
@@ -190,6 +200,9 @@ func (n *SPVNode) ConnectToPeer(peer string) error {
 		n.connected = false
 		return fmt.Errorf("failed to read version message: %v", err)
 	}
+
+	// Reset read deadline
+	conn.SetReadDeadline(time.Time{})
 
 	command := string(bytes.TrimRight(msg.Command[:], "\x00"))
 	if command != MsgVersion {
