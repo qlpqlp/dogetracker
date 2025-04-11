@@ -16,6 +16,7 @@ type BlockDatabase interface {
 	GetBlockHeight(hash string) (uint32, error)
 	GetLastProcessedBlock() (string, uint32, string, error) // Returns (blockHash, height, prevBlockHash)
 	UpdateLastProcessedBlock(blockHash string, height uint32, prevBlockHash string) error
+	GetHeaders() ([]*BlockHeader, error)
 }
 
 // SQLDatabase implements the BlockDatabase interface using SQL
@@ -313,4 +314,33 @@ func (d *SQLDatabase) UpdateLastProcessedBlock(blockHash string, height uint32, 
 		WHERE id = 1
 	`, blockHash, height, prevBlockHash)
 	return err
+}
+
+// GetHeaders retrieves all block headers from the database
+func (d *SQLDatabase) GetHeaders() ([]*BlockHeader, error) {
+	rows, err := d.db.Query(`
+		SELECT height, version, prev_block, merkle_root, time, bits, nonce
+		FROM blocks
+		ORDER BY height
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying headers: %v", err)
+	}
+	defer rows.Close()
+
+	var headers []*BlockHeader
+	for rows.Next() {
+		var header BlockHeader
+		var prevBlock, merkleRoot []byte
+		err := rows.Scan(&header.Height, &header.Version, &prevBlock,
+			&merkleRoot, &header.Time, &header.Bits, &header.Nonce)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning header: %v", err)
+		}
+		copy(header.PrevBlock[:], prevBlock)
+		copy(header.MerkleRoot[:], merkleRoot)
+		headers = append(headers, &header)
+	}
+
+	return headers, nil
 }
