@@ -1148,10 +1148,6 @@ func NewMessage(command string, payload []byte) *Message {
 	return msg
 }
 
-func (n *SPVNode) sendVerackMessage() error {
-	return n.sendMessage(NewMessage(MsgVerack, nil))
-}
-
 func (n *SPVNode) sendPingMessage() error {
 	nonce := make([]byte, 8)
 	if _, err := rand.Read(nonce); err != nil {
