@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"sync"
 	"time"
@@ -344,7 +345,23 @@ func (n *SPVNode) handleVersionMessage(payload []byte) error {
 	}
 
 	// Send verack
-	return n.sendVerackMessage()
+	if err := n.sendVerackMessage(); err != nil {
+		return fmt.Errorf("error sending verack: %v", err)
+	}
+
+	// Wait for verack response
+	select {
+	case <-n.verackReceived:
+		// Send getheaders message starting from genesis block
+		genesisHash := "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691" // Dogecoin genesis block hash
+		if err := n.sendGetHeaders(genesisHash); err != nil {
+			return fmt.Errorf("error sending getheaders: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout waiting for verack response")
+	}
+
+	return nil
 }
 
 // handleHeadersMessage processes incoming headers messages
@@ -355,18 +372,17 @@ func (n *SPVNode) handleHeadersMessage(msg *Message) error {
 		return fmt.Errorf("error reading headers count: %v", err)
 	}
 
-	// Process only first 5 headers
-	if count > 5 {
-		count = 5
-		n.logger.Printf("Limiting to first 5 headers for testing")
+	if count == 0 {
+		n.logger.Printf("No more headers to sync")
+		n.headerSyncComplete = true
+		return nil
 	}
 
 	// Process each header
 	offset := 1 // Skip the count byte
 	for i := uint64(0); i < count; i++ {
 		if offset+80 > len(msg.Payload) {
-			log.Printf("Partial headers message received, requesting more")
-			return nil
+			return fmt.Errorf("partial headers message received")
 		}
 
 		header := &BlockHeader{}
@@ -378,27 +394,38 @@ func (n *SPVNode) handleHeadersMessage(msg *Message) error {
 		header.Bits = binary.LittleEndian.Uint32(headerData[72:76])
 		header.Nonce = binary.LittleEndian.Uint32(headerData[76:80])
 
+		// Validate header
+		if err := n.validateHeader(*header); err != nil {
+			return fmt.Errorf("invalid header at height %d: %v", n.currentHeight+1, err)
+		}
+
 		// Update current height
 		n.currentHeight++
 		header.Height = uint32(n.currentHeight)
 
-		// Store header
+		// Store header in database
 		if err := n.db.StoreBlock(&Block{Header: *header}); err != nil {
 			return fmt.Errorf("error storing header: %v", err)
 		}
 
-		// Request block to get transactions
-		blockHash := hex.EncodeToString(header.PrevBlock[:])
-		n.logger.Printf("Requesting block %s at height %d", blockHash, header.Height)
-		if err := n.sendGetDataMessage(2, header.PrevBlock); err != nil {
-			n.logger.Printf("Error requesting block: %v", err)
-		}
+		// Update chain tip
+		n.chainTip = header
 
 		offset += 80
 	}
 
-	// Log completion
-	n.logger.Printf("Processed %d headers", count)
+	// Request more headers if available
+	if count == MaxHeadersResults {
+		// Send getheaders message with the last header's hash
+		lastHeader := n.chainTip
+		hash := hex.EncodeToString(lastHeader.PrevBlock[:])
+		if err := n.sendGetHeaders(hash); err != nil {
+			return fmt.Errorf("error requesting more headers: %v", err)
+		}
+	} else {
+		n.headerSyncComplete = true
+		n.logger.Printf("Header synchronization complete at height %d", n.currentHeight)
+	}
 
 	return nil
 }
@@ -855,7 +882,36 @@ func (n *SPVNode) verifyMerkleProof(header BlockHeader, txid [32]byte, proof []b
 // Chain validation functions (to be implemented)
 
 func (n *SPVNode) validateHeader(header BlockHeader) error {
-	log.Printf("Validating block header at height %d", header.Height)
+	// Check version
+	if header.Version < 1 {
+		return fmt.Errorf("invalid version %d", header.Version)
+	}
+
+	// Check timestamp (must not be more than 2 hours in the future)
+	maxTime := time.Now().Add(2 * time.Hour).Unix()
+	if int64(header.Time) > maxTime {
+		return fmt.Errorf("header timestamp too far in the future")
+	}
+
+	// Check previous block hash
+	if n.currentHeight > 0 {
+		prevHeader, err := n.db.GetBlock(hex.EncodeToString(header.PrevBlock[:]))
+		if err != nil {
+			return fmt.Errorf("error getting previous block: %v", err)
+		}
+		if prevHeader == nil {
+			return fmt.Errorf("previous block not found")
+		}
+	}
+
+	// Check proof of work
+	target := CompactToBig(header.Bits)
+	hash := header.GetHash()
+	hashInt := new(big.Int).SetBytes(hash[:])
+	if hashInt.Cmp(target) > 0 {
+		return fmt.Errorf("block hash %x does not meet target difficulty", hash)
+	}
+
 	return nil
 }
 
@@ -1158,4 +1214,43 @@ func (n *SPVNode) sendPingMessage() error {
 
 func (n *SPVNode) sendPongMessage(nonce []byte) error {
 	return n.sendMessage(NewMessage(MsgPong, nonce))
+}
+
+// CompactToBig converts a compact representation of a target difficulty to a big.Int
+func CompactToBig(compact uint32) *big.Int {
+	mantissa := compact & 0x007fffff
+	isNegative := compact&0x00800000 != 0
+	exponent := uint(compact >> 24)
+
+	var bn *big.Int
+	if exponent <= 3 {
+		mantissa >>= 8 * (3 - exponent)
+		bn = big.NewInt(int64(mantissa))
+	} else {
+		bn = big.NewInt(int64(mantissa))
+		bn.Lsh(bn, 8*(exponent-3))
+	}
+
+	if isNegative {
+		bn = bn.Neg(bn)
+	}
+
+	return bn
+}
+
+// GetHash returns the hash of the block header
+func (h *BlockHeader) GetHash() [32]byte {
+	// Serialize header
+	data := make([]byte, 80)
+	binary.LittleEndian.PutUint32(data[0:4], h.Version)
+	copy(data[4:36], h.PrevBlock[:])
+	copy(data[36:68], h.MerkleRoot[:])
+	binary.LittleEndian.PutUint32(data[68:72], h.Time)
+	binary.LittleEndian.PutUint32(data[72:76], h.Bits)
+	binary.LittleEndian.PutUint32(data[76:80], h.Nonce)
+
+	// Double SHA-256
+	hash1 := sha256.Sum256(data)
+	hash2 := sha256.Sum256(hash1[:])
+	return hash2
 }
