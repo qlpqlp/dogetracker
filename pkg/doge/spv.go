@@ -98,7 +98,8 @@ func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase) *SPVNode {
 		Checkpoints:  make(map[int]string),
 	}
 
-	return &SPVNode{
+	// Create SPV node
+	node := &SPVNode{
 		peers:              peers,
 		headers:            make(map[uint32]BlockHeader),
 		blocks:             make(map[string]*Block),
@@ -114,6 +115,35 @@ func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase) *SPVNode {
 		stopChan:           make(chan struct{}),
 		reconnectDelay:     5 * time.Second,
 	}
+
+	// Load existing headers from database
+	if err := node.loadHeadersFromDB(); err != nil {
+		log.Printf("Error loading headers from database: %v", err)
+	}
+
+	return node
+}
+
+// loadHeadersFromDB loads headers from the database
+func (n *SPVNode) loadHeadersFromDB() error {
+	// Get all headers from database
+	headers, err := n.db.GetHeaders()
+	if err != nil {
+		return fmt.Errorf("error getting headers from database: %v", err)
+	}
+
+	// Store headers in memory
+	n.headersMutex.Lock()
+	defer n.headersMutex.Unlock()
+	for _, header := range headers {
+		n.headers[header.Height] = header
+		if header.Height > n.currentHeight {
+			n.currentHeight = header.Height
+		}
+	}
+
+	n.logger.Printf("Loaded %d headers from database, current height: %d", len(headers), n.currentHeight)
+	return nil
 }
 
 // ConnectToPeer connects to a peer
@@ -659,12 +689,6 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 	headersProcessed := 0
 	var lastValidHeight uint32 = 0
 
-	// If we're starting from a specific height and have no headers yet,
-	// we need to find the first header that chains to our start height
-	if len(n.headers) == 0 && n.startHeight > 0 {
-		n.logger.Printf("Starting from height %d, looking for first valid header", n.startHeight)
-	}
-
 	for i := uint64(0); i < count; i++ {
 		// Check if we have enough bytes left
 		if reader.Len() < 80 { // Minimum size for a header
@@ -727,6 +751,7 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 
 		// Calculate block hash
 		hash := header.Hash()
+		hashStr := hex.EncodeToString(hash[:])
 
 		// Find the height by looking up the previous block
 		var height uint32
@@ -767,13 +792,15 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 
 		// If we still couldn't find the previous block, skip this header
 		if height == 0 {
-			n.logger.Printf("Warning: Could not find previous block for header %x, skipping", hash)
+			n.logger.Printf("Warning: Could not find previous block for header %s, skipping", hashStr)
 			continue
 		}
 
 		// Only store headers at or above our start height
 		if height >= n.startHeight {
-			n.logger.Printf("Received header for block %x at height %d", hash, height)
+			n.logger.Printf("Received header for block %s at height %d", hashStr, height)
+
+			// Store header in memory
 			n.headersMutex.Lock()
 			n.headers[height] = header
 			if height > n.currentHeight {
@@ -781,6 +808,13 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			}
 			lastValidHeight = height
 			n.headersMutex.Unlock()
+
+			// Store header in database
+			if err := n.db.StoreHeader(header, height); err != nil {
+				n.logger.Printf("Error storing header in database: %v", err)
+				return fmt.Errorf("error storing header in database: %v", err)
+			}
+
 			headersProcessed++
 		}
 	}

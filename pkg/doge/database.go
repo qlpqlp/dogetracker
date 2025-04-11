@@ -15,6 +15,8 @@ type BlockDatabase interface {
 	GetTransaction(txid string) (*Transaction, error)
 	GetBlockHeight(hash string) (uint32, error)
 	GetLastProcessedBlock() (int64, error)
+	StoreHeader(header BlockHeader, height uint32) error
+	GetHeaders() (map[uint32]BlockHeader, error)
 }
 
 // SQLDatabase implements the BlockDatabase interface using SQL
@@ -300,4 +302,59 @@ func (d *SQLDatabase) GetLastProcessedBlock() (int64, error) {
 		return 0, err
 	}
 	return blockHeight, nil
+}
+
+// StoreHeader stores a block header in the database
+func (d *SQLDatabase) StoreHeader(header BlockHeader, height uint32) error {
+	// Calculate block hash
+	headerBytes := header.Serialize()
+	hash1 := sha256.Sum256(headerBytes)
+	hash2 := sha256.Sum256(hash1[:])
+	blockHash := hex.EncodeToString(hash2[:])
+
+	// Store block header
+	_, err := d.db.Exec(`
+		INSERT INTO blocks (hash, height, version, prev_block, merkle_root, time, bits, nonce)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (hash) DO NOTHING
+	`, blockHash, height, header.Version, header.PrevBlock[:],
+		header.MerkleRoot[:], header.Time, header.Bits, header.Nonce)
+	if err != nil {
+		return fmt.Errorf("error storing block header: %v", err)
+	}
+
+	return nil
+}
+
+// GetHeaders retrieves all block headers from the database
+func (d *SQLDatabase) GetHeaders() (map[uint32]BlockHeader, error) {
+	headers := make(map[uint32]BlockHeader)
+
+	rows, err := d.db.Query(`
+		SELECT height, version, prev_block, merkle_root, time, bits, nonce
+		FROM blocks
+		ORDER BY height
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying headers: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var header BlockHeader
+		var height uint32
+		var prevBlock, merkleRoot []byte
+
+		err := rows.Scan(&height, &header.Version, &prevBlock,
+			&merkleRoot, &header.Time, &header.Bits, &header.Nonce)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning header: %v", err)
+		}
+
+		copy(header.PrevBlock[:], prevBlock)
+		copy(header.MerkleRoot[:], merkleRoot)
+		headers[height] = header
+	}
+
+	return headers, nil
 }
