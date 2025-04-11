@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -46,8 +47,14 @@ type UnspentOutput struct {
 
 // InitDB initializes the database schema
 func InitDB(db *sql.DB) error {
+	// Drop existing headers table if it exists
+	_, err := db.Exec(`DROP TABLE IF EXISTS headers CASCADE`)
+	if err != nil {
+		return fmt.Errorf("error dropping headers table: %v", err)
+	}
+
 	// Create blocks table
-	_, err := db.Exec(`
+	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS blocks (
 			hash VARCHAR(64) PRIMARY KEY,
 			height BIGINT NOT NULL,
@@ -64,9 +71,9 @@ func InitDB(db *sql.DB) error {
 		return err
 	}
 
-	// Create headers table
+	// Create headers table with BYTEA column
 	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS headers (
+		CREATE TABLE headers (
 			hash VARCHAR(64) PRIMARY KEY,
 			height BIGINT NOT NULL,
 			header BYTEA NOT NULL,
@@ -74,7 +81,7 @@ func InitDB(db *sql.DB) error {
 		)
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("error creating headers table: %v", err)
 	}
 
 	// Insert genesis block into headers table
@@ -98,7 +105,7 @@ func InitDB(db *sql.DB) error {
 		) ON CONFLICT (hash) DO NOTHING
 	`, genesisHeader)
 	if err != nil {
-		return err
+		return fmt.Errorf("error inserting genesis block: %v", err)
 	}
 
 	// Create tracked_addresses table
