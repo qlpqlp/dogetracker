@@ -642,27 +642,12 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 			return fmt.Errorf("invalid transaction count in headers message: %d", txCount)
 		}
 
-		// Calculate height based on previous block hash
-		if i == 0 {
-			// First header is at height 0
-			header.Height = 0
-		} else {
-			// Find previous header by hash
-			for h, prevHeader := range n.headers {
-				// Calculate hash of previous header
-				prevHash := sha256.Sum256(prevHeader.Serialize())
-				prevHash = sha256.Sum256(prevHash[:])
-
-				if bytes.Equal(prevHash[:], header.PrevBlock[:]) {
-					header.Height = h + 1
-					break
-				}
-			}
-		}
+		// Calculate height based on start height
+		header.Height = n.currentHeight + uint32(i)
+		log.Printf("Storing header at height %d", header.Height)
 
 		// Store header
 		n.headers[header.Height] = header
-		log.Printf("Stored header at height %d", header.Height)
 
 		// Update current height if this is the highest header
 		if header.Height > n.currentHeight {
