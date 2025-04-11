@@ -419,7 +419,7 @@ func (t *Tracker) ProcessBlocks(ctx context.Context, startBlock int64) error {
 	}
 
 	// Get last processed block from database
-	lastBlockHash, lastBlockHeight, err := db.GetLastProcessedBlock(t.db)
+	_, lastBlockHeight, err := db.GetLastProcessedBlock(t.db)
 	if err != nil {
 		return fmt.Errorf("error getting last processed block: %v", err)
 	}
