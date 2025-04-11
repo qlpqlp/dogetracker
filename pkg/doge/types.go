@@ -3,15 +3,12 @@ package doge
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"log"
-	"net"
-	"time"
 )
 
 // Block represents a Dogecoin block
 type Block struct {
-	Header BlockHeader
-	Tx     []Transaction
+	Header       BlockHeader
+	Transactions []*Transaction
 }
 
 // BlockHeader represents a Dogecoin block header
@@ -79,26 +76,6 @@ type TxOutput struct {
 type OutPoint struct {
 	Hash  [32]byte
 	Index uint32
-}
-
-// SPVNode represents a SPV node
-type SPVNode struct {
-	headers        map[uint32]BlockHeader
-	blocks         map[string]*Block
-	peers          []string
-	watchAddresses map[string]bool
-	bloomFilter    []byte
-	currentHeight  uint32
-	verackReceived chan struct{}
-	db             Database
-	logger         *log.Logger
-	conn           net.Conn
-	connected      bool
-	reconnectDelay time.Duration
-	stopChan       chan struct{}
-	lastMessage    time.Time
-	messageTimeout time.Duration
-	chainParams    *ChainParams
 }
 
 // Database interface for storing blocks and transactions

@@ -33,6 +33,9 @@ const (
 
 	// MaxMessageSize is the maximum allowed size for a message
 	MaxMessageSize = 32 * 1024 * 1024 // 32MB
+
+	// MaxHeadersResults is the maximum number of headers to request in one getheaders message
+	MaxHeadersResults = 1000
 )
 
 // Message represents a Dogecoin protocol message
@@ -44,23 +47,53 @@ type Message struct {
 	Payload  []byte
 }
 
+// SPVNode represents a Simplified Payment Verification node
+type SPVNode struct {
+	headers            map[uint32]BlockHeader
+	blocks             map[string]*Block
+	peers              []string
+	watchAddresses     map[string]bool
+	bloomFilter        []byte
+	currentHeight      uint32
+	verackReceived     chan struct{}
+	db                 Database
+	logger             *log.Logger
+	connected          bool
+	lastMessage        time.Time
+	messageTimeout     time.Duration
+	chainParams        *ChainParams
+	conn               net.Conn
+	stopChan           chan struct{}
+	reconnectDelay     time.Duration
+	bestKnownHeight    uint32
+	chainTip           *BlockHeader
+	headerSyncComplete bool
+	blockSyncComplete  bool
+}
+
 // NewSPVNode creates a new SPV node
 func NewSPVNode(peers []string, startHeight uint32, db Database) *SPVNode {
 	log.Printf("Initializing SPV node with %d peers, starting from height %d", len(peers), startHeight)
 	return &SPVNode{
-		headers:        make(map[uint32]BlockHeader),
-		blocks:         make(map[string]*Block),
-		peers:          peers,
-		watchAddresses: make(map[string]bool),
-		bloomFilter:    make([]byte, 256),
-		currentHeight:  startHeight,
-		verackReceived: make(chan struct{}),
-		db:             db,
-		logger:         log.New(os.Stdout, "SPV: ", log.LstdFlags),
-		connected:      false,
-		lastMessage:    time.Now(),
-		messageTimeout: 30 * time.Second,
-		chainParams:    &MainNetParams,
+		headers:            make(map[uint32]BlockHeader),
+		blocks:             make(map[string]*Block),
+		peers:              peers,
+		watchAddresses:     make(map[string]bool),
+		bloomFilter:        make([]byte, 256),
+		currentHeight:      startHeight,
+		verackReceived:     make(chan struct{}),
+		db:                 db,
+		logger:             log.New(os.Stdout, "SPV: ", log.LstdFlags),
+		connected:          false,
+		lastMessage:        time.Now(),
+		messageTimeout:     30 * time.Second,
+		chainParams:        &MainNetParams,
+		stopChan:           make(chan struct{}),
+		reconnectDelay:     5 * time.Second,
+		bestKnownHeight:    startHeight,
+		chainTip:           nil,
+		headerSyncComplete: false,
+		blockSyncComplete:  false,
 	}
 }
 
@@ -565,7 +598,7 @@ func (n *SPVNode) handleVersionMessage(payload []byte) error {
 	return n.sendMessage(MsgVerack, nil)
 }
 
-// handleHeadersMessage handles a headers message
+// handleHeadersMessage handles a headers message from the peer
 func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 	log.Printf("Received headers message with payload length: %d", len(payload))
 
@@ -652,7 +685,25 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		// Update current height if this is the highest header
 		if header.Height > n.currentHeight {
 			n.currentHeight = header.Height
+			n.chainTip = &header
 			log.Printf("Updated current height to %d", n.currentHeight)
+		}
+	}
+
+	// Check if we've reached the best known height
+	if n.currentHeight >= n.bestKnownHeight-5 {
+		log.Printf("Header sync complete, switching to block sync")
+		n.headerSyncComplete = true
+		n.blockSyncComplete = false
+		// Start block sync
+		if err := n.sendGetBlocks(); err != nil {
+			return fmt.Errorf("error starting block sync: %v", err)
+		}
+	} else if count == MaxHeadersResults {
+		// Request more headers
+		log.Printf("Requesting more headers from height %d", n.currentHeight)
+		if err := n.sendGetHeaders(); err != nil {
+			return fmt.Errorf("error requesting more headers: %v", err)
 		}
 	}
 
@@ -682,13 +733,24 @@ func (n *SPVNode) handleBlockMessage(payload []byte) error {
 	}
 
 	// Process transactions
-	for _, tx := range block.Tx {
-		if n.ProcessTransaction(&tx) {
+	for _, tx := range block.Transactions {
+		if n.ProcessTransaction(tx) {
 			log.Printf("Found relevant transaction")
 			// Store transaction in database
-			if err := n.db.StoreTransaction(&tx, blockHash, block.Header.Height); err != nil {
+			if err := n.db.StoreTransaction(tx, blockHash, block.Header.Height); err != nil {
 				log.Printf("Error storing transaction in database: %v", err)
 			}
+		}
+	}
+
+	// Check if we've reached the best known height
+	if block.Header.Height >= n.bestKnownHeight-5 {
+		log.Printf("Block sync complete")
+		n.blockSyncComplete = true
+	} else {
+		// Request next block
+		if err := n.sendGetBlocks(); err != nil {
+			return fmt.Errorf("error requesting next block: %v", err)
 		}
 	}
 
@@ -890,7 +952,7 @@ func parseNetworkTransaction(payload []byte) (Transaction, int, error) {
 }
 
 // isRelevant checks if a transaction is relevant to our watch addresses
-func (n *SPVNode) isRelevant(tx Transaction) bool {
+func (n *SPVNode) isRelevant(tx *Transaction) bool {
 	// Check if any of our watch addresses are in the transaction
 	for _, output := range tx.Outputs {
 		scriptHash := sha256.Sum256(output.ScriptPubKey)
@@ -919,7 +981,7 @@ func (n *SPVNode) parseBlockMessage(payload []byte) (*Block, error) {
 			Bits:       binary.LittleEndian.Uint32(payload[72:76]),
 			Nonce:      binary.LittleEndian.Uint32(payload[76:80]),
 		},
-		Tx: make([]Transaction, 0),
+		Transactions: make([]*Transaction, 0),
 	}
 
 	copy(block.Header.PrevBlock[:], payload[4:36])
@@ -938,7 +1000,7 @@ func (n *SPVNode) parseBlockMessage(payload []byte) (*Block, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse transaction %d: %v", i, err)
 		}
-		block.Tx = append(block.Tx, tx)
+		block.Transactions = append(block.Transactions, &tx)
 		offset += bytesRead
 	}
 
@@ -1017,10 +1079,10 @@ func (n *SPVNode) GetBlockTransactions(blockHash string) ([]*Transaction, error)
 	case block := <-blockChan:
 		// Filter transactions that match our bloom filter
 		var relevantTxs []*Transaction
-		for _, tx := range block.Tx {
+		for _, tx := range block.Transactions {
 			if n.isRelevant(tx) {
 				n.logger.Printf("Found relevant transaction: %s", tx.TxID)
-				relevantTxs = append(relevantTxs, &tx)
+				relevantTxs = append(relevantTxs, tx)
 			}
 		}
 		return relevantTxs, nil
@@ -1283,4 +1345,46 @@ func (n *SPVNode) Stop() {
 		n.conn = nil
 	}
 	n.connected = false
+}
+
+// sendGetBlocks sends a getblocks message to request blocks
+func (n *SPVNode) sendGetBlocks() error {
+	// Create getblocks message payload
+	payload := make([]byte, 0)
+
+	// Version (4 bytes)
+	versionBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(versionBytes, ProtocolVersion)
+	payload = append(payload, versionBytes...)
+
+	// Hash count (varint)
+	payload = append(payload, 0x01) // One hash
+
+	// Block locator hashes (32 bytes)
+	// Start with the block at current height
+	if n.currentHeight > 0 {
+		// Find the block hash at current height
+		for h, header := range n.headers {
+			if h == n.currentHeight {
+				// Calculate hash of the header
+				headerBytes := header.Serialize()
+				hash1 := sha256.Sum256(headerBytes)
+				hash2 := sha256.Sum256(hash1[:])
+				payload = append(payload, hash2[:]...)
+				break
+			}
+		}
+	} else {
+		// Start with genesis block hash
+		genesisHash, _ := hex.DecodeString(MainNetParams.GenesisBlock)
+		payload = append(payload, genesisHash...)
+	}
+
+	// Stop hash (32 bytes) - all zeros to get all blocks
+	stopHash := make([]byte, 32)
+	payload = append(payload, stopHash...)
+
+	log.Printf("Sending getblocks message with payload length: %d", len(payload))
+	log.Printf("Requesting blocks starting from height %d", n.currentHeight)
+	return n.sendMessage("getblocks", payload)
 }
