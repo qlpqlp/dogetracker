@@ -14,6 +14,7 @@ type BlockDatabase interface {
 	GetBlock(hash string) (*Block, error)
 	GetTransaction(txid string) (*Transaction, error)
 	GetBlockHeight(hash string) (uint32, error)
+	GetLastProcessedBlock() (int64, error)
 }
 
 // SQLDatabase implements the BlockDatabase interface using SQL
@@ -285,4 +286,18 @@ func (d *SQLDatabase) GetBlockHeight(hash string) (uint32, error) {
 		return 0, fmt.Errorf("error getting block height: %v", err)
 	}
 	return height, nil
+}
+
+// GetLastProcessedBlock retrieves the last processed block height
+func (d *SQLDatabase) GetLastProcessedBlock() (int64, error) {
+	var blockHeight int64
+	err := d.db.QueryRow(`
+		SELECT block_height 
+		FROM last_processed_block 
+		WHERE id = 1
+	`).Scan(&blockHeight)
+	if err != nil {
+		return 0, err
+	}
+	return blockHeight, nil
 }
