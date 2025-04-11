@@ -442,6 +442,19 @@ func (t *Tracker) ProcessBlocks(ctx context.Context, startBlock int64) error {
 		return fmt.Errorf("error getting block count: %v", err)
 	}
 
+	// If we don't have any headers yet, wait for them
+	if currentHeight == 0 {
+		log.Printf("Waiting for headers...")
+		time.Sleep(5 * time.Second)
+		currentHeight, err = t.spvNode.GetBlockCount()
+		if err != nil {
+			return fmt.Errorf("error getting block count: %v", err)
+		}
+		if currentHeight == 0 {
+			return fmt.Errorf("no headers received after waiting")
+		}
+	}
+
 	// Process blocks from startBlock to currentHeight
 	for height := startBlock; height <= currentHeight; height++ {
 		select {
