@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"encoding/hex"
 	"time"
 )
 
@@ -70,12 +69,7 @@ func InitDB(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS headers (
 			hash VARCHAR(64) PRIMARY KEY,
 			height BIGINT NOT NULL,
-			version INTEGER NOT NULL,
-			prev_block VARCHAR(64) NOT NULL,
-			merkle_root VARCHAR(64) NOT NULL,
-			time BIGINT NOT NULL,
-			bits INTEGER NOT NULL,
-			nonce INTEGER NOT NULL,
+			header BYTEA NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
@@ -84,19 +78,25 @@ func InitDB(db *sql.DB) error {
 	}
 
 	// Insert genesis block into headers table
+	genesisHeader := []byte{
+		0x01, 0x00, 0x00, 0x00, // Version
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Prev block
+		0x1a, 0x91, 0xe3, 0xda, 0xce, 0x36, 0xe2, 0xbe, 0x3b, 0xf0, 0x30, 0xa6, 0x56, 0x79, 0xfe, 0x82,
+		0x1a, 0xa1, 0xd6, 0xef, 0x92, 0xe7, 0xc9, 0x90, 0x2e, 0xb3, 0x18, 0x18, 0x2c, 0x35, 0x56, 0x91, // Merkle root
+		0x24, 0x8d, 0x52, 0x52, // Time
+		0xff, 0xff, 0x0f, 0x1e, // Bits
+		0x67, 0x86, 0x01, 0x00, // Nonce
+	}
+
 	_, err = db.Exec(`
-		INSERT INTO headers (hash, height, version, prev_block, merkle_root, time, bits, nonce)
+		INSERT INTO headers (hash, height, header)
 		VALUES (
 			'1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691',
 			0,
-			1,
-			'0000000000000000000000000000000000000000000000000000000000000000',
-			'1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691',
-			1386325540,
-			503382015,  -- 0x1e0ffff0 in decimal
-			99943
+			$1
 		) ON CONFLICT (hash) DO NOTHING
-	`)
+	`, genesisHeader)
 	if err != nil {
 		return err
 	}
@@ -196,28 +196,20 @@ func InitDB(db *sql.DB) error {
 
 // StoreBlockHeader stores a block header in the database
 func StoreBlockHeader(db *sql.DB, hash string, height int64, header []byte) error {
-	// Encode the header data as hex
-	headerHex := hex.EncodeToString(header)
-
 	_, err := db.Exec(`
 		INSERT INTO headers (hash, height, header)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (hash) DO UPDATE
 		SET height = $2, header = $3
-	`, hash, height, headerHex)
+	`, hash, height, header)
 	return err
 }
 
 // GetBlockHeader retrieves a block header from the database
 func GetBlockHeader(db *sql.DB, hash string) ([]byte, error) {
-	var headerHex string
+	var header []byte
 	err := db.QueryRow(`
 		SELECT header FROM headers WHERE hash = $1
-	`, hash).Scan(&headerHex)
-	if err != nil {
-		return nil, err
-	}
-
-	// Decode the hex string back to bytes
-	return hex.DecodeString(headerHex)
+	`, hash).Scan(&header)
+	return header, err
 }
