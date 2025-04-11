@@ -46,17 +46,6 @@ type Message struct {
 	Payload []byte
 }
 
-// BlockDatabase interface defines the methods required for block storage
-type BlockDatabase interface {
-	StoreBlock(block *Block) error
-	GetBlock(hash string) (*Block, error)
-	GetBlockHeight(hash string) (int64, error)
-	GetLastProcessedBlock() (string, int64, int64, error)
-	StoreTransaction(tx *Transaction, blockHash string, height uint32) error
-	GetTransaction(hash string) (*Transaction, error)
-	GetHeaders() ([]*BlockHeader, error)
-}
-
 // Deserialize reads a block header from a byte slice
 func (h *BlockHeader) Deserialize(data []byte) error {
 	if len(data) < 80 {
@@ -256,11 +245,12 @@ func (n *SPVNode) ConnectToPeer(peer string) error {
 
 	// Send getheaders message
 	n.logger.Printf("Sending getheaders message...")
-	if err := n.sendGetHeaders(hex.EncodeToString(n.headers[n.currentHeight].PrevBlock[:])); err != nil {
+	prevBlock := n.headers[n.currentHeight].PrevBlock
+	if err := n.sendGetHeaders(hex.EncodeToString(prevBlock[:])); err != nil {
 		n.conn.Close()
 		n.conn = nil
 		n.connected = false
-		return fmt.Errorf("failed to send getheaders message: %v", err)
+		return fmt.Errorf("error sending getheaders message: %v", err)
 	}
 
 	// Start message handling goroutine
