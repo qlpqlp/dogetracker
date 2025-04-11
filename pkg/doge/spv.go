@@ -88,10 +88,12 @@ type SPVNode struct {
 	headersMutex       sync.RWMutex
 	blockChan          chan *Block
 	targetHeight       uint32
+	done               chan struct{}
+	mu                 sync.Mutex
 }
 
 // NewSPVNode creates a new SPV node
-func NewSPVNode(peers []string, startHeight uint32, db Database) *SPVNode {
+func NewSPVNode(peers []string, startHeight uint32, db Database, logger *log.Logger) (*SPVNode, error) {
 	// Initialize chain params with Dogecoin mainnet parameters
 	chainParams := &ChainParams{
 		ChainName:    "mainnet",
@@ -114,12 +116,13 @@ func NewSPVNode(peers []string, startHeight uint32, db Database) *SPVNode {
 		verackReceived:     make(chan struct{}),
 		headerSyncComplete: false,
 		blockSyncComplete:  false,
-		logger:             log.New(log.Writer(), "SPV: ", log.LstdFlags),
+		logger:             logger,
 		chainParams:        chainParams,
 		stopChan:           make(chan struct{}),
 		reconnectDelay:     5 * time.Second,
 		blockChan:          make(chan *Block),
 		targetHeight:       uint32(startHeight),
+		done:               make(chan struct{}),
 	}
 
 	// Load existing headers from database
@@ -127,7 +130,7 @@ func NewSPVNode(peers []string, startHeight uint32, db Database) *SPVNode {
 		log.Printf("Error loading headers from database: %v", err)
 	}
 
-	return node
+	return node, nil
 }
 
 // loadHeadersFromDB loads headers from the database
@@ -152,125 +155,42 @@ func (n *SPVNode) loadHeadersFromDB() error {
 	return nil
 }
 
-// ConnectToPeer connects to a peer
-func (n *SPVNode) ConnectToPeer(peer string) error {
-	n.logger.Printf("Connecting to peer %s...", peer)
+// Connect establishes a connection to a Dogecoin node
+func (n *SPVNode) Connect(addr string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 
-	// Close existing connection if any
-	if n.conn != nil {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-	}
-
-	// Set connection timeout
-	dialer := &net.Dialer{
-		Timeout: 10 * time.Second,
-	}
-
-	// Connect to peer
-	conn, err := dialer.Dial("tcp", peer)
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to connect to peer: %v", err)
+		return err
 	}
-
-	// Set read and write timeouts
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 
 	n.conn = conn
-	n.connected = true
-	n.logger.Printf("Connected to peer %s", peer)
-
-	// Send version message
-	n.logger.Printf("Sending version message...")
-	if err := n.sendVersionMessage(); err != nil {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-		return fmt.Errorf("failed to send version message: %v", err)
-	}
-
-	// Wait for version message from peer
-	n.logger.Printf("Waiting for version message from peer...")
-	msg, err := n.readMessage()
-	if err != nil {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-		return fmt.Errorf("failed to read version message: %v", err)
-	}
-
-	// Reset read deadline
-	conn.SetReadDeadline(time.Time{})
-
-	command := string(bytes.TrimRight(msg.Command[:], "\x00"))
-	if command != MsgVersion {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-		return fmt.Errorf("expected version message, got %s", command)
-	}
-
-	// Handle version message
-	if err := n.handleVersionMessage(msg.Payload); err != nil {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-		return fmt.Errorf("failed to handle version message: %v", err)
-	}
-
-	// Send verack
-	n.logger.Printf("Sending verack...")
-	if err := n.sendVerackMessage(); err != nil {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-		return fmt.Errorf("failed to send verack: %v", err)
-	}
-
-	// Wait for verack
-	n.logger.Printf("Waiting for verack...")
-	msg, err = n.readMessage()
-	if err != nil {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-		return fmt.Errorf("failed to read verack: %v", err)
-	}
-
-	command = string(bytes.TrimRight(msg.Command[:], "\x00"))
-	if command != MsgVerack {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-		return fmt.Errorf("expected verack message, got %s", command)
-	}
-
-	// Send filter load message
-	n.logger.Printf("Sending filter load message...")
-	if err := n.sendFilterLoadMessage(); err != nil {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-		return fmt.Errorf("failed to send filter load message: %v", err)
-	}
-
-	// Send getheaders message
-	n.logger.Printf("Sending getheaders message...")
-	prevBlock := n.headers[n.currentHeight].PrevBlock
-	if err := n.sendGetHeaders(hex.EncodeToString(prevBlock[:])); err != nil {
-		n.conn.Close()
-		n.conn = nil
-		n.connected = false
-		return fmt.Errorf("error sending getheaders message: %v", err)
-	}
-
-	// Start message handling goroutine
-	n.logger.Printf("Starting message handling goroutine...")
-	go n.handleMessages()
-
+	n.logger.Printf("Connected to %s", addr)
 	return nil
+}
+
+// Start begins the SPV node's operation
+func (n *SPVNode) Start() error {
+	n.logger.Println("Starting SPV node...")
+	// TODO: Implement message handling and blockchain synchronization
+	return nil
+}
+
+// Done returns a channel that is closed when the node stops
+func (n *SPVNode) Done() <-chan struct{} {
+	return n.done
+}
+
+// Stop gracefully shuts down the SPV node
+func (n *SPVNode) Stop() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if n.conn != nil {
+		n.conn.Close()
+	}
+	close(n.done)
 }
 
 // handleMessages handles incoming messages from the peer
@@ -297,6 +217,7 @@ func (n *SPVNode) handleMessages() {
 		case MsgVerack:
 			n.verackReceived <- struct{}{}
 		case MsgHeaders:
+			n.logger.Printf("Received headers message")
 			if err := n.handleHeadersMessage(msg); err != nil {
 				n.logger.Printf("Error handling headers message: %v", err)
 			}
@@ -1343,7 +1264,7 @@ func (n *SPVNode) StartConnectionManager() {
 				if !n.connected {
 					n.logger.Printf("Not connected, attempting to connect to peers...")
 					for _, peer := range n.peers {
-						if err := n.ConnectToPeer(peer); err != nil {
+						if err := n.Connect(peer); err != nil {
 							n.logger.Printf("Failed to connect to peer %s: %v", peer, err)
 							continue
 						}
@@ -1354,16 +1275,6 @@ func (n *SPVNode) StartConnectionManager() {
 			}
 		}
 	}()
-}
-
-// Stop stops the SPV node
-func (n *SPVNode) Stop() {
-	close(n.stopChan)
-	if n.conn != nil {
-		n.conn.Close()
-		n.conn = nil
-	}
-	n.connected = false
 }
 
 // sendGetBlocks sends a getblocks message to request blocks
