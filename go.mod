@@ -1,4 +1,4 @@
-module github.com/qlpqlp/dogetracker
+module github.com/dogeorg/dogetracker
 
 go 1.18
 

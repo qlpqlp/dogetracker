@@ -7,6 +7,16 @@ import (
 	"fmt"
 )
 
+// Database interface defines the methods required for storing and retrieving blockchain data
+type Database interface {
+	GetBlock(hash string) (*Block, error)
+	StoreBlock(block *Block) error
+	GetTransaction(txid string) (*Transaction, error)
+	StoreTransaction(tx *Transaction, blockHash string, height uint32) error
+	GetLastProcessedBlock() (string, uint32, string, error)
+	Close() error
+}
+
 // BlockDatabase interface for storing blocks and transactions
 type BlockDatabase interface {
 	StoreBlock(block *Block) error
@@ -291,19 +301,26 @@ func (d *SQLDatabase) GetBlockHeight(hash string) (uint32, error) {
 }
 
 // GetLastProcessedBlock retrieves the last processed block information
-func (d *SQLDatabase) GetLastProcessedBlock() (string, int64, int64, error) {
-	var blockHash string
-	var height int64
-	var timestamp int64
+func (d *SQLDatabase) GetLastProcessedBlock() (string, uint32, string, error) {
+	var hash string
+	var height uint32
+	var merkleRoot string
+
 	err := d.db.QueryRow(`
-		SELECT block_hash, block_height, time 
-		FROM blocks 
-		WHERE height = (SELECT MAX(height) FROM blocks)
-	`).Scan(&blockHash, &height, &timestamp)
-	if err != nil {
-		return "", 0, 0, err
+		SELECT hash, height, merkle_root
+		FROM blocks
+		ORDER BY height DESC
+		LIMIT 1
+	`).Scan(&hash, &height, &merkleRoot)
+
+	if err == sql.ErrNoRows {
+		return "", 0, "", nil
 	}
-	return blockHash, height, timestamp, nil
+	if err != nil {
+		return "", 0, "", fmt.Errorf("error getting last processed block: %v", err)
+	}
+
+	return hash, height, merkleRoot, nil
 }
 
 // UpdateLastProcessedBlock updates the last processed block information
@@ -343,4 +360,9 @@ func (d *SQLDatabase) GetHeaders() ([]*BlockHeader, error) {
 	}
 
 	return headers, nil
+}
+
+// Close closes the database connection
+func (s *SQLDatabase) Close() error {
+	return s.db.Close()
 }

@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/qlpqlp/dogetracker/pkg/mempool"
-	"github.com/qlpqlp/dogetracker/server/db"
+	"github.com/dogeorg/dogetracker/pkg/mempool"
+	"github.com/dogeorg/dogetracker/server/db"
 )
 
 type Server struct {

@@ -15,9 +15,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/qlpqlp/dogetracker/pkg/doge"
-	"github.com/qlpqlp/dogetracker/pkg/spec"
-	"github.com/qlpqlp/dogetracker/server/db"
+	"github.com/dogeorg/dogetracker/pkg/doge"
+	"github.com/dogeorg/dogetracker/pkg/spec"
+	"github.com/dogeorg/dogetracker/server/db"
 )
 
 const (
