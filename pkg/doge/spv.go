@@ -544,18 +544,32 @@ func (n *SPVNode) sendGetHeaders() error {
 	// Create block locator hashes
 	var locatorHashes [][]byte
 
-	// Start from current height
-	for height := n.currentHeight; height > 0 && len(locatorHashes) < 10; height-- {
-		if header, exists := n.headers[height]; exists {
-			hash := header.Hash()
-			locatorHashes = append(locatorHashes, hash[:])
+	// If we have no headers yet, start from genesis
+	if len(n.headers) == 0 {
+		// Use genesis block hash from chain params
+		genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
+		if err != nil {
+			return fmt.Errorf("failed to decode genesis block hash: %v", err)
 		}
-	}
+		// Reverse the hash (Dogecoin uses little-endian)
+		for i, j := 0, len(genesisHash)-1; i < j; i, j = i+1, j-1 {
+			genesisHash[i], genesisHash[j] = genesisHash[j], genesisHash[i]
+		}
+		locatorHashes = append(locatorHashes, genesisHash)
+	} else {
+		// Start from current height
+		for height := n.currentHeight; height > 0 && len(locatorHashes) < 10; height-- {
+			if header, exists := n.headers[height]; exists {
+				hash := header.Hash()
+				locatorHashes = append(locatorHashes, hash[:])
+			}
+		}
 
-	// Always include genesis block hash
-	genesisHeader := n.headers[0]
-	genesisHash := genesisHeader.Hash()
-	locatorHashes = append(locatorHashes, genesisHash[:])
+		// Always include genesis block hash
+		genesisHeader := n.headers[0]
+		genesisHash := genesisHeader.Hash()
+		locatorHashes = append(locatorHashes, genesisHash[:])
+	}
 
 	// Create payload
 	var payload []byte
