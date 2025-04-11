@@ -85,6 +85,8 @@ type Database interface {
 	GetBlock(hash string) (*Block, error)
 	GetTransaction(txid string) (*Transaction, error)
 	GetBlockHeight(hash string) (uint32, error)
+	GetLastProcessedBlock() (string, int64, int64, error)
+	GetHeaders() ([]*BlockHeader, error)
 }
 
 // Blockchain represents a connection to a Dogecoin node

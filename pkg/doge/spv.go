@@ -2,6 +2,7 @@ package doge
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -56,17 +57,6 @@ type BlockDatabase interface {
 	GetHeaders() ([]*BlockHeader, error)
 }
 
-// BlockHeader represents a Dogecoin block header
-type BlockHeader struct {
-	Version    uint32
-	PrevBlock  [32]byte
-	MerkleRoot [32]byte
-	Timestamp  uint32
-	Bits       uint32
-	Nonce      uint32
-	Height     uint32
-}
-
 // Deserialize reads a block header from a byte slice
 func (h *BlockHeader) Deserialize(data []byte) error {
 	if len(data) < 80 {
@@ -76,7 +66,7 @@ func (h *BlockHeader) Deserialize(data []byte) error {
 	h.Version = binary.LittleEndian.Uint32(data[0:4])
 	copy(h.PrevBlock[:], data[4:36])
 	copy(h.MerkleRoot[:], data[36:68])
-	h.Timestamp = binary.LittleEndian.Uint32(data[68:72])
+	h.Time = binary.LittleEndian.Uint32(data[68:72])
 	h.Bits = binary.LittleEndian.Uint32(data[72:76])
 	h.Nonce = binary.LittleEndian.Uint32(data[76:80])
 
@@ -230,7 +220,7 @@ func (n *SPVNode) ConnectToPeer(peer string) error {
 
 	// Send verack
 	n.logger.Printf("Sending verack...")
-	if err := n.sendMessage(MsgVerack, nil); err != nil {
+	if err := n.sendVerackMessage(); err != nil {
 		n.conn.Close()
 		n.conn = nil
 		n.connected = false
@@ -413,7 +403,7 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 
 		// Time (4 bytes)
 		timeBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(timeBytes, header.Timestamp)
+		binary.LittleEndian.PutUint32(timeBytes, header.Time)
 		payload = append(payload, timeBytes...)
 
 		// Bits (4 bytes)
@@ -431,7 +421,7 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 	}
 
 	// Send message
-	return n.sendMessage(MsgHeaders, payload)
+	return n.sendMessage(NewMessage(MsgHeaders, payload))
 }
 
 // readMessage reads a message from the connection
@@ -474,25 +464,28 @@ func (n *SPVNode) readMessage() (*Message, error) {
 }
 
 // sendMessage sends a message to the peer
-func (n *SPVNode) sendMessage(command string, payload []byte) error {
-	// Write message header
-	if err := binary.Write(n.conn, binary.LittleEndian, command); err != nil {
+func (n *SPVNode) sendMessage(msg *Message) error {
+	if n.conn == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	// Write message
+	if err := binary.Write(n.conn, binary.LittleEndian, msg.Command); err != nil {
 		return err
 	}
 
 	// Write payload length
-	length := uint32(len(payload))
-	if err := binary.Write(n.conn, binary.LittleEndian, length); err != nil {
+	payloadLen := uint32(len(msg.Payload))
+	if err := binary.Write(n.conn, binary.LittleEndian, payloadLen); err != nil {
 		return err
 	}
 
 	// Write payload
-	if len(payload) > 0 {
-		if _, err := n.conn.Write(payload); err != nil {
-			return err
-		}
+	if _, err := n.conn.Write(msg.Payload); err != nil {
+		return err
 	}
 
+	n.lastMessage = time.Now()
 	return nil
 }
 
@@ -565,7 +558,7 @@ func (n *SPVNode) sendVersionMessage() error {
 	// Start height (4 bytes)
 	binary.LittleEndian.PutUint32(payload[82:86], 0)
 
-	return n.sendMessage(MsgVersion, payload)
+	return n.sendMessage(NewMessage(MsgVersion, payload))
 }
 
 // sendFilterLoadMessage sends a filter load message
@@ -591,7 +584,7 @@ func (n *SPVNode) sendFilterLoadMessage() error {
 	// Flags (1 byte)
 	payload = append(payload, 0x01) // BLOOM_UPDATE_ALL
 
-	return n.sendMessage(MsgFilterLoad, payload)
+	return n.sendMessage(NewMessage(MsgFilterLoad, payload))
 }
 
 // sendGetHeaders sends a getheaders message to request block headers
@@ -648,7 +641,7 @@ func (n *SPVNode) handleVersionMessage(payload []byte) error {
 	}
 
 	// Send verack
-	return n.sendMessage(MsgVerack, nil)
+	return n.sendVerackMessage()
 }
 
 // handleHeadersMessage processes incoming headers messages
@@ -672,7 +665,7 @@ func (n *SPVNode) handleHeadersMessage(msg *Message) error {
 		header.Version = binary.LittleEndian.Uint32(headerData[0:4])
 		copy(header.PrevBlock[:], headerData[4:36])
 		copy(header.MerkleRoot[:], headerData[36:68])
-		header.Timestamp = binary.LittleEndian.Uint32(headerData[68:72])
+		header.Time = binary.LittleEndian.Uint32(headerData[68:72])
 		header.Bits = binary.LittleEndian.Uint32(headerData[72:76])
 		header.Nonce = binary.LittleEndian.Uint32(headerData[76:80])
 
@@ -884,13 +877,13 @@ func (n *SPVNode) handleInvMessage(payload []byte) error {
 		case 2: // MSG_BLOCK
 			log.Printf("Received block inventory: %s", hashStr)
 			// Request the block
-			if err := n.sendGetData(invType, hash); err != nil {
+			if err := n.sendGetDataMessage(invType, hash); err != nil {
 				log.Printf("Error requesting block: %v", err)
 			}
 		case 1: // MSG_TX
 			log.Printf("Received transaction inventory: %s", hashStr)
 			// Request the transaction
-			if err := n.sendGetData(invType, hash); err != nil {
+			if err := n.sendGetDataMessage(invType, hash); err != nil {
 				log.Printf("Error requesting transaction: %v", err)
 			}
 		default:
@@ -905,7 +898,7 @@ func (n *SPVNode) handleInvMessage(payload []byte) error {
 func (n *SPVNode) handlePingMessage(payload []byte) error {
 	// Send pong message with same nonce
 	log.Printf("Received ping message, sending pong")
-	return n.sendMessage(MsgPong, payload)
+	return n.sendPongMessage(payload)
 }
 
 // AddWatchAddress adds an address to watch
@@ -1117,7 +1110,7 @@ func (n *SPVNode) GetBlockTransactions(blockHash string) ([]*Transaction, error)
 	copy(payload[1:], hashBytes)
 
 	// Send message
-	err = n.sendMessage("getdata", payload)
+	err = n.sendMessage(NewMessage(MsgGetData, payload))
 	if err != nil {
 		return nil, fmt.Errorf("error sending getdata message: %v", err)
 	}
@@ -1157,9 +1150,12 @@ func extractAddressesFromScript(script []byte) []string {
 
 // Network protocol functions (to be implemented)
 
-func (n *SPVNode) sendGetData(invType uint32, hash [32]byte) error {
-	log.Printf("Sending getdata message for type %d, hash %x", invType, hash)
-	return nil
+func (n *SPVNode) sendGetDataMessage(invType uint32, hash [32]byte) error {
+	payload := make([]byte, 37)
+	binary.LittleEndian.PutUint32(payload[0:4], 1) // Count
+	binary.LittleEndian.PutUint32(payload[4:8], invType)
+	copy(payload[8:40], hash[:])
+	return n.sendMessage(NewMessage(MsgGetData, payload))
 }
 
 func (n *SPVNode) sendMemPool() error {
@@ -1425,7 +1421,7 @@ func (n *SPVNode) sendGetBlocks() error {
 
 	n.logger.Printf("Sending getblocks message with payload length: %d", len(payload))
 	n.logger.Printf("Requesting blocks starting from height %d", n.currentHeight)
-	return n.sendMessage("getblocks", payload)
+	return n.sendMessage(NewMessage("getblocks", payload))
 }
 
 // Helper functions for message serialization
@@ -1478,4 +1474,20 @@ func NewMessage(command string, payload []byte) *Message {
 	}
 	copy(msg.Command[:], command)
 	return msg
+}
+
+func (n *SPVNode) sendVerackMessage() error {
+	return n.sendMessage(NewMessage(MsgVerack, nil))
+}
+
+func (n *SPVNode) sendPingMessage() error {
+	nonce := make([]byte, 8)
+	if _, err := rand.Read(nonce); err != nil {
+		return err
+	}
+	return n.sendMessage(NewMessage(MsgPing, nonce))
+}
+
+func (n *SPVNode) sendPongMessage(nonce []byte) error {
+	return n.sendMessage(NewMessage(MsgPong, nonce))
 }
