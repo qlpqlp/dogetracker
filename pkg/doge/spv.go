@@ -197,6 +197,9 @@ func (n *SPVNode) startHeaderSync() error {
 	// If we have no headers, start from genesis
 	if height == 0 {
 		lastHash = "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691"
+		n.logger.Printf("Starting from genesis block: %s", lastHash)
+	} else {
+		n.logger.Printf("Starting from block %s at height %d", lastHash, height)
 	}
 
 	// Send getheaders message
@@ -238,7 +241,7 @@ func (n *SPVNode) handleMessages() {
 		}
 
 		command := string(bytes.TrimRight(msg.Command[:], "\x00"))
-		n.logger.Printf("Received message of type: %s", command)
+		n.logger.Printf("Received message of type: %s (length: %d)", command, msg.Length)
 
 		switch command {
 		case MsgVersion:
@@ -256,7 +259,7 @@ func (n *SPVNode) handleMessages() {
 				n.logger.Printf("No one waiting for verack")
 			}
 		case MsgHeaders:
-			n.logger.Printf("Received headers message")
+			n.logger.Printf("Received headers message (length: %d)", len(msg.Payload))
 			if err := n.handleHeadersMessage(msg); err != nil {
 				n.logger.Printf("Error handling headers message: %v", err)
 			}
@@ -277,19 +280,15 @@ func (n *SPVNode) handleMessages() {
 				n.logger.Printf("Error handling ping message: %v", err)
 			}
 		case "sendheaders":
-			// Acknowledge sendheaders message but don't send verack
 			n.logger.Printf("Received sendheaders message")
 		case "sendcmpct":
-			// Acknowledge sendcmpct message but don't send verack
 			n.logger.Printf("Received sendcmpct message")
 		case "getheaders":
-			// Handle getheaders message from peer
-			n.logger.Printf("Received getheaders message, sending headers")
+			n.logger.Printf("Received getheaders message")
 			if err := n.handleGetHeadersMessage(msg.Payload); err != nil {
 				n.logger.Printf("Error handling getheaders message: %v", err)
 			}
 		case "feefilter":
-			// Acknowledge feefilter message but don't send verack
 			n.logger.Printf("Received feefilter message")
 		default:
 			n.logger.Printf("Received unknown message type: %s", command)

@@ -194,13 +194,14 @@ func (n *SPVNode) sendGetHeaders(blockHash string) error {
 
 	// Create message
 	message := &Message{
-		Magic:    0xc0c0c0c0,
+		Magic:    0xc0c0c0c0, // Dogecoin magic number
 		Length:   uint32(len(payload)),
 		Checksum: checksumArray,
 		Payload:  payload,
 	}
 	copy(message.Command[:], MsgGetHeaders)
 
+	n.logger.Printf("Sending getheaders message for block %s (payload length: %d)", blockHash, len(payload))
 	return n.sendMessage(message)
 }
 
