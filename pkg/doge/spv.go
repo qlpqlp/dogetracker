@@ -557,7 +557,7 @@ func (n *SPVNode) sendGetHeaders() error {
 	// Create block locator hashes
 	var locatorHashes [][]byte
 
-	// If we have no headers yet, start from genesis
+	// If we have no headers yet, start from the requested height
 	if len(n.headers) == 0 {
 		// Use genesis block hash from chain params
 		genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
@@ -607,7 +607,7 @@ func (n *SPVNode) sendGetHeaders() error {
 	stopHash := make([]byte, 32)
 	payload = append(payload, stopHash...)
 
-	n.logger.Printf("Sending getheaders message with %d locator hashes, starting from height %d", len(locatorHashes), n.currentHeight)
+	n.logger.Printf("Sending getheaders message with %d locator hashes, starting from height %d", len(locatorHashes), n.startHeight)
 	return n.sendMessage(MsgGetHeaders, payload)
 }
 
@@ -692,12 +692,14 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		// Calculate block hash
 		hash := header.Hash()
 		height := uint32(len(n.headers))
-		n.logger.Printf("Received header for block %x at height %d", hash, height)
 
-		// Store header
-		n.headers[height] = header
-		n.currentHeight = height
-		headersProcessed++
+		// Only store headers at or above our start height
+		if height >= n.startHeight {
+			n.logger.Printf("Received header for block %x at height %d", hash, height)
+			n.headers[height] = header
+			n.currentHeight = height
+			headersProcessed++
+		}
 	}
 
 	// If we processed all headers in this message, request more if needed
