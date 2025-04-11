@@ -279,30 +279,29 @@ func (n *SPVNode) handleMessages() {
 
 // handleGetHeadersMessage handles a getheaders message from the peer
 func (n *SPVNode) handleGetHeadersMessage(payload []byte) error {
-	// Parse getheaders message
 	reader := bytes.NewReader(payload)
 
-	// Version (4 bytes)
+	// Read version (4 bytes)
 	var version uint32
 	if err := binary.Read(reader, binary.LittleEndian, &version); err != nil {
 		return fmt.Errorf("error reading version: %v", err)
 	}
 
-	// Hash count (varint)
-	count, err := binary.ReadUvarint(reader)
+	// Read hash count (varint)
+	hashCount, err := binary.ReadUvarint(reader)
 	if err != nil {
 		return fmt.Errorf("error reading hash count: %v", err)
 	}
 
-	// Block locator hashes
-	locatorHashes := make([][32]byte, count)
-	for i := uint64(0); i < count; i++ {
+	// Read block locator hashes
+	locatorHashes := make([][32]byte, hashCount)
+	for i := uint64(0); i < hashCount; i++ {
 		if _, err := reader.Read(locatorHashes[i][:]); err != nil {
 			return fmt.Errorf("error reading locator hash: %v", err)
 		}
 	}
 
-	// Stop hash (32 bytes)
+	// Read stop hash (32 bytes)
 	var stopHash [32]byte
 	if _, err := reader.Read(stopHash[:]); err != nil {
 		return fmt.Errorf("error reading stop hash: %v", err)
@@ -336,7 +335,7 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 	for _, header := range headers {
 		// Version (4 bytes)
 		versionBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(versionBytes, uint32(header.Version))
+		binary.LittleEndian.PutUint32(versionBytes, header.Version)
 		payload = append(payload, versionBytes...)
 
 		// Previous block hash (32 bytes)
@@ -364,6 +363,7 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 		payload = append(payload, 0x00)
 	}
 
+	// Send message
 	return n.sendMessage(MsgHeaders, payload)
 }
 
