@@ -764,8 +764,8 @@ func (n *SPVNode) GetBlockCount() (int64, error) {
 	return int64(maxHeight), nil
 }
 
-// parseTransaction parses a transaction from the network protocol
-func parseTransaction(payload []byte) (Transaction, int, error) {
+// parseNetworkTransaction parses a transaction from the network protocol
+func parseNetworkTransaction(payload []byte) (Transaction, int, error) {
 	if len(payload) < 4 {
 		return Transaction{}, 0, fmt.Errorf("transaction message too short")
 	}
@@ -918,7 +918,7 @@ func (n *SPVNode) parseBlockMessage(payload []byte) (*Block, error) {
 	// Parse transactions
 	offset := 80 + bytesRead
 	for i := uint64(0); i < txCount; i++ {
-		tx, bytesRead, err := parseTransaction(payload[offset:])
+		tx, bytesRead, err := parseNetworkTransaction(payload[offset:])
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse transaction %d: %v", i, err)
 		}

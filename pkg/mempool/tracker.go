@@ -164,17 +164,22 @@ func (t *MempoolTracker) checkMempool() error {
 		}
 
 		// Decode transaction using doge package
-		tx := doge.DecodeTx(txBytes)
+		tx, err := doge.DecodeTransaction(txBytes)
+		if err != nil {
+			log.Printf("Error decoding transaction: %v", err)
+			continue
+		}
 
 		// Process outputs (incoming transactions)
 		for _, vout := range tx.Outputs {
 			// Extract addresses from output script
-			scriptType, addr := doge.ClassifyScript(vout.ScriptPubKey, &doge.DogeMainNetChain)
-			if scriptType == "" {
+			scriptType := doge.ClassifyScript(vout.ScriptPubKey, &doge.MainNetParams)
+			if scriptType == doge.ScriptTypeUnknown {
 				continue
 			}
 
-			addrStr := string(addr)
+			// TODO: Extract address from script based on script type
+			addrStr := "" // This needs to be implemented
 			if addrInfo, exists := t.trackedAddrs[addrStr]; exists {
 				// Found a tracked address in the output
 				amount := float64(vout.Value) / 1e8 // Convert from satoshis to DOGE
@@ -183,16 +188,19 @@ func (t *MempoolTracker) checkMempool() error {
 				var senderAddress string
 				if len(tx.Inputs) > 0 && len(tx.Inputs[0].PreviousOutput.Hash) > 0 {
 					// Get the first input's previous transaction
-					txIDHex := doge.HexEncodeReversed(tx.Inputs[0].PreviousOutput.Hash)
+					txIDHex := doge.HexEncodeReversed(tx.Inputs[0].PreviousOutput.Hash[:])
 					prevTxData, err := t.client.GetRawTransaction(txIDHex)
 					if err == nil {
 						prevTxBytes, err := doge.HexDecode(prevTxData["hex"].(string))
 						if err == nil {
-							prevTx := doge.DecodeTx(prevTxBytes)
-							if int(tx.Inputs[0].PreviousOutput.Index) < len(prevTx.Outputs) {
+							prevTx, err := doge.DecodeTransaction(prevTxBytes)
+							if err == nil && int(tx.Inputs[0].PreviousOutput.Index) < len(prevTx.Outputs) {
 								prevOut := prevTx.Outputs[tx.Inputs[0].PreviousOutput.Index]
-								_, senderAddr := doge.ClassifyScript(prevOut.ScriptPubKey, &doge.DogeMainNetChain)
-								senderAddress = string(senderAddr)
+								scriptType := doge.ClassifyScript(prevOut.ScriptPubKey, &doge.MainNetParams)
+								if scriptType != doge.ScriptTypeUnknown {
+									// TODO: Extract sender address from script based on script type
+									senderAddress = "" // This needs to be implemented
+								}
 							}
 						}
 					}
@@ -237,7 +245,7 @@ func (t *MempoolTracker) checkMempool() error {
 			}
 
 			// Get the previous transaction
-			txIDHex := doge.HexEncodeReversed(vin.PreviousOutput.Hash)
+			txIDHex := doge.HexEncodeReversed(vin.PreviousOutput.Hash[:])
 			prevTxData, err := t.client.GetRawTransaction(txIDHex)
 			if err != nil {
 				continue
@@ -247,26 +255,33 @@ func (t *MempoolTracker) checkMempool() error {
 			if err != nil {
 				continue
 			}
-			prevTx := doge.DecodeTx(prevTxBytes)
+			prevTx, err := doge.DecodeTransaction(prevTxBytes)
+			if err != nil {
+				continue
+			}
 
 			// Check if the spent output belonged to a tracked address
 			if vin.PreviousOutput.Index < uint32(len(prevTx.Outputs)) {
 				prevOut := prevTx.Outputs[vin.PreviousOutput.Index]
-				scriptType, addr := doge.ClassifyScript(prevOut.ScriptPubKey, &doge.DogeMainNetChain)
-				if scriptType == "" {
+				scriptType := doge.ClassifyScript(prevOut.ScriptPubKey, &doge.MainNetParams)
+				if scriptType == doge.ScriptTypeUnknown {
 					continue
 				}
 
-				addrStr := string(addr)
+				// TODO: Extract address from script based on script type
+				addrStr := "" // This needs to be implemented
 				if addrInfo, exists := t.trackedAddrs[addrStr]; exists {
 					// Found a tracked address in the input
 					amount := -float64(prevOut.Value) / 1e8 // Negative for outgoing, convert from satoshis
 
 					// Get receiver address from outputs
 					var receiverAddress string
-					if len(tx.VOut) > 0 {
-						_, receiverAddr := doge.ClassifyScript(tx.VOut[0].Script, &doge.DogeMainNetChain)
-						receiverAddress = string(receiverAddr)
+					if len(tx.Outputs) > 0 {
+						scriptType := doge.ClassifyScript(tx.Outputs[0].ScriptPubKey, &doge.MainNetParams)
+						if scriptType != doge.ScriptTypeUnknown {
+							// TODO: Extract receiver address from script based on script type
+							receiverAddress = "" // This needs to be implemented
+						}
 					}
 
 					// Check if this transaction already exists
