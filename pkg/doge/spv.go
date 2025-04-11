@@ -175,6 +175,10 @@ func (n *SPVNode) Start() error {
 	select {
 	case <-n.verackReceived:
 		n.logger.Println("Version handshake completed")
+		// Start header synchronization
+		if err := n.startHeaderSync(); err != nil {
+			return fmt.Errorf("error starting header sync: %v", err)
+		}
 	case <-time.After(10 * time.Second):
 		return fmt.Errorf("timeout waiting for version handshake")
 	}
@@ -442,16 +446,12 @@ func (n *SPVNode) handleVersionMessage(payload []byte) error {
 	}
 	n.logger.Printf("Sent verack message")
 
-	// Wait for verack response
+	// Signal that we've received version and sent verack
 	select {
-	case <-n.verackReceived:
-		n.logger.Printf("Version handshake completed")
-		// Start header synchronization
-		if err := n.startHeaderSync(); err != nil {
-			return fmt.Errorf("error starting header sync: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("timeout waiting for verack response")
+	case n.verackReceived <- struct{}{}:
+		n.logger.Printf("Sent version handshake signal")
+	default:
+		n.logger.Printf("No one waiting for version handshake")
 	}
 
 	return nil
