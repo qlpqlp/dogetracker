@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"time"
 )
 
@@ -191,4 +192,32 @@ func InitDB(db *sql.DB) error {
 	`)
 
 	return err
+}
+
+// StoreBlockHeader stores a block header in the database
+func StoreBlockHeader(db *sql.DB, hash string, height int64, header []byte) error {
+	// Encode the header data as hex
+	headerHex := hex.EncodeToString(header)
+
+	_, err := db.Exec(`
+		INSERT INTO headers (hash, height, header)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (hash) DO UPDATE
+		SET height = $2, header = $3
+	`, hash, height, headerHex)
+	return err
+}
+
+// GetBlockHeader retrieves a block header from the database
+func GetBlockHeader(db *sql.DB, hash string) ([]byte, error) {
+	var headerHex string
+	err := db.QueryRow(`
+		SELECT header FROM headers WHERE hash = $1
+	`, hash).Scan(&headerHex)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decode the hex string back to bytes
+	return hex.DecodeString(headerHex)
 }

@@ -71,6 +71,7 @@ type SPVNode struct {
 	blockSyncComplete  bool
 	startHeight        uint32
 	headersMutex       sync.RWMutex
+	blockChan          chan *Block
 }
 
 // NewSPVNode creates a new SPV node
@@ -114,6 +115,7 @@ func NewSPVNode(peers []string, startHeight uint32, db BlockDatabase) *SPVNode {
 		chainParams:        chainParams,
 		stopChan:           make(chan struct{}),
 		reconnectDelay:     5 * time.Second,
+		blockChan:          make(chan *Block),
 	}
 
 	// Load existing headers from database
@@ -1156,90 +1158,33 @@ func (n *SPVNode) parseBlockMessage(payload []byte) (*Block, error) {
 	return block, nil
 }
 
-// GetBlockTransactions requests and processes transactions for a specific block
+// GetBlockTransactions retrieves transactions for a block
 func (n *SPVNode) GetBlockTransactions(blockHash string) ([]*Transaction, error) {
-	if !n.connected {
-		return nil, fmt.Errorf("not connected to peer")
-	}
-
 	// Convert block hash to bytes
 	hashBytes, err := hex.DecodeString(blockHash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode block hash: %v", err)
+		return nil, fmt.Errorf("error decoding block hash: %v", err)
 	}
 	if len(hashBytes) != 32 {
-		return nil, fmt.Errorf("invalid block hash length")
+		return nil, fmt.Errorf("invalid block hash length: expected 32 bytes, got %d", len(hashBytes))
 	}
 
 	// Create getdata message payload
-	payload := make([]byte, 1+32) // 1 byte for count + 32 bytes for hash
-	payload[0] = 1                // Count of 1
+	payload := make([]byte, 37) // 1 byte for type + 32 bytes for hash
+	payload[0] = 2              // Set inventory type to block (2)
 	copy(payload[1:], hashBytes)
 
-	// Send getdata message
-	n.logger.Printf("Sending getdata message for block %s", blockHash)
-	if err := n.sendMessage(MsgGetData, payload); err != nil {
-		n.connected = false
-		return nil, fmt.Errorf("failed to send getdata message: %v", err)
+	// Send message
+	err = n.sendMessage("getdata", payload)
+	if err != nil {
+		return nil, fmt.Errorf("error sending getdata message: %v", err)
 	}
 
-	// Wait for block message with timeout
-	timeout := time.After(30 * time.Second)
-	blockChan := make(chan *Block)
-	errorChan := make(chan error)
-
-	go func() {
-		for {
-			msg, err := n.readMessage()
-			if err != nil {
-				if err == io.EOF {
-					n.connected = false
-					errorChan <- fmt.Errorf("connection closed by peer")
-					return
-				}
-				errorChan <- fmt.Errorf("failed to read message: %v", err)
-				return
-			}
-
-			command := string(bytes.TrimRight(msg.Command[:], "\x00"))
-			n.logger.Printf("Received message type: %s", command)
-
-			if command == MsgBlock {
-				block, err := n.parseBlockMessage(msg.Payload)
-				if err != nil {
-					errorChan <- fmt.Errorf("failed to parse block message: %v", err)
-					return
-				}
-
-				// Verify block hash matches
-				blockHashBytes := block.Header.Hash()
-				if !bytes.Equal(blockHashBytes, hashBytes) {
-					errorChan <- fmt.Errorf("block hash mismatch")
-					return
-				}
-
-				blockChan <- block
-				return
-			}
-		}
-	}()
-
+	// Wait for block message
 	select {
-	case block := <-blockChan:
-		// Filter transactions that match our bloom filter
-		var relevantTxs []*Transaction
-		for _, tx := range block.Transactions {
-			if n.isRelevant(tx) {
-				n.logger.Printf("Found relevant transaction: %s", tx.TxID)
-				relevantTxs = append(relevantTxs, tx)
-			}
-		}
-		return relevantTxs, nil
-
-	case err := <-errorChan:
-		return nil, err
-
-	case <-timeout:
+	case blockMsg := <-n.blockChan:
+		return blockMsg.Transactions, nil
+	case <-time.After(30 * time.Second):
 		return nil, fmt.Errorf("timeout waiting for block message")
 	}
 }
