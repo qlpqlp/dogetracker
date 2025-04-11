@@ -210,69 +210,60 @@ func (n *SPVNode) handleMessages() {
 		msg, err := n.readMessage()
 		if err != nil {
 			if err == io.EOF {
-				log.Printf("Connection closed by peer")
+				n.logger.Printf("Connection closed by peer")
 			} else {
-				log.Printf("Error reading message: %v", err)
+				n.logger.Printf("Error reading message: %v", err)
 			}
 			return
 		}
 
 		command := string(bytes.TrimRight(msg.Command[:], "\x00"))
-		log.Printf("Received message of type: %s", command)
+		n.logger.Printf("Received message of type: %s", command)
 
 		switch command {
 		case MsgVersion:
 			if err := n.handleVersionMessage(msg.Payload); err != nil {
-				log.Printf("Error handling version message: %v", err)
+				n.logger.Printf("Error handling version message: %v", err)
 			}
 		case MsgVerack:
 			n.verackReceived <- struct{}{}
 		case MsgHeaders:
 			if err := n.handleHeadersMessage(msg.Payload); err != nil {
-				log.Printf("Error handling headers message: %v", err)
+				n.logger.Printf("Error handling headers message: %v", err)
 			}
 		case MsgBlock:
 			if err := n.handleBlockMessage(msg.Payload); err != nil {
-				log.Printf("Error handling block message: %v", err)
+				n.logger.Printf("Error handling block message: %v", err)
 			}
 		case MsgTx:
 			if err := n.handleTxMessage(msg.Payload); err != nil {
-				log.Printf("Error handling transaction message: %v", err)
+				n.logger.Printf("Error handling transaction message: %v", err)
 			}
 		case MsgInv:
 			if err := n.handleInvMessage(msg.Payload); err != nil {
-				log.Printf("Error handling inventory message: %v", err)
+				n.logger.Printf("Error handling inventory message: %v", err)
 			}
 		case MsgPing:
 			if err := n.handlePingMessage(msg.Payload); err != nil {
-				log.Printf("Error handling ping message: %v", err)
+				n.logger.Printf("Error handling ping message: %v", err)
 			}
 		case "sendheaders":
-			// Acknowledge sendheaders message
-			log.Printf("Received sendheaders message, sending verack")
-			if err := n.sendMessage(MsgVerack, nil); err != nil {
-				log.Printf("Error sending verack: %v", err)
-			}
+			// Acknowledge sendheaders message but don't send verack
+			n.logger.Printf("Received sendheaders message")
 		case "sendcmpct":
-			// Acknowledge sendcmpct message
-			log.Printf("Received sendcmpct message, sending verack")
-			if err := n.sendMessage(MsgVerack, nil); err != nil {
-				log.Printf("Error sending verack: %v", err)
-			}
+			// Acknowledge sendcmpct message but don't send verack
+			n.logger.Printf("Received sendcmpct message")
 		case "getheaders":
 			// Handle getheaders message from peer
-			log.Printf("Received getheaders message, sending headers")
+			n.logger.Printf("Received getheaders message, sending headers")
 			if err := n.handleGetHeadersMessage(msg.Payload); err != nil {
-				log.Printf("Error handling getheaders message: %v", err)
+				n.logger.Printf("Error handling getheaders message: %v", err)
 			}
 		case "feefilter":
-			// Acknowledge feefilter message
-			log.Printf("Received feefilter message, sending verack")
-			if err := n.sendMessage(MsgVerack, nil); err != nil {
-				log.Printf("Error sending verack: %v", err)
-			}
+			// Acknowledge feefilter message but don't send verack
+			n.logger.Printf("Received feefilter message")
 		default:
-			log.Printf("Ignoring unknown message type: %s", command)
+			n.logger.Printf("Ignoring unknown message type: %s", command)
 		}
 	}
 }
