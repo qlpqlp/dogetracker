@@ -56,11 +56,14 @@ type NetAddress struct {
 
 // readMessage reads a message from the connection
 func (n *SPVNode) readMessage() (*Message, error) {
+	n.logger.Printf("Reading message header...")
 	// Read message header
 	header := make([]byte, 24)
 	if _, err := io.ReadFull(n.conn, header); err != nil {
+		n.logger.Printf("Error reading message header: %v", err)
 		return nil, err
 	}
+	n.logger.Printf("Read message header: %x", header)
 
 	// Parse header
 	msg := &Message{}
@@ -69,12 +72,18 @@ func (n *SPVNode) readMessage() (*Message, error) {
 	msg.Length = binary.LittleEndian.Uint32(header[16:20])
 	copy(msg.Checksum[:], header[20:24])
 
+	n.logger.Printf("Parsed message header: magic=0x%x, command=%s, length=%d",
+		msg.Magic, string(bytes.TrimRight(msg.Command[:], "\x00")), msg.Length)
+
 	// Read payload
 	if msg.Length > 0 {
+		n.logger.Printf("Reading message payload of length %d...", msg.Length)
 		msg.Payload = make([]byte, msg.Length)
 		if _, err := io.ReadFull(n.conn, msg.Payload); err != nil {
+			n.logger.Printf("Error reading message payload: %v", err)
 			return nil, err
 		}
+		n.logger.Printf("Read message payload: %x", msg.Payload)
 	}
 
 	return msg, nil
@@ -107,6 +116,7 @@ func (n *SPVNode) sendMessage(msg *Message) error {
 
 // sendVersionMessage sends a version message
 func (n *SPVNode) sendVersionMessage() error {
+	n.logger.Printf("Sending version message...")
 	msg := &VersionMessage{
 		Version:     70015,
 		Services:    0,
@@ -143,6 +153,7 @@ func (n *SPVNode) sendVersionMessage() error {
 	}
 	copy(message.Command[:], MsgVersion)
 
+	n.logger.Printf("Sending version message with payload length: %d", len(payload))
 	return n.sendMessage(message)
 }
 
@@ -214,6 +225,7 @@ func doubleSha256(data []byte) []byte {
 
 // handleVersionMessage handles a version message
 func (n *SPVNode) handleVersionMessage(payload []byte) error {
+	n.logger.Printf("Handling version message with payload length: %d", len(payload))
 	reader := bytes.NewReader(payload)
 
 	// Parse version message fields
@@ -266,6 +278,7 @@ func (n *SPVNode) handleVersionMessage(payload []byte) error {
 		version, services, string(userAgent), startHeight)
 
 	// Send verack message
+	n.logger.Printf("Sending verack message...")
 	if err := n.sendVerackMessage(); err != nil {
 		return fmt.Errorf("error sending verack: %v", err)
 	}

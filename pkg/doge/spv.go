@@ -229,7 +229,9 @@ func (n *SPVNode) Stop() {
 
 // handleMessages handles incoming messages from the peer
 func (n *SPVNode) handleMessages() {
+	n.logger.Printf("Starting message handler")
 	for {
+		n.logger.Printf("Waiting for message...")
 		msg, err := n.readMessage()
 		if err != nil {
 			if err == io.EOF {
