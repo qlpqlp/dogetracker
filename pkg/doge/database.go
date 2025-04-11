@@ -14,7 +14,7 @@ type BlockDatabase interface {
 	GetBlock(hash string) (*Block, error)
 	GetTransaction(txid string) (*Transaction, error)
 	GetBlockHeight(hash string) (uint32, error)
-	GetLastProcessedBlock() (string, uint32, string, error) // Returns (blockHash, height, prevBlockHash)
+	GetLastProcessedBlock() (string, int64, int64, error) // Returns (blockHash, height, timestamp)
 	UpdateLastProcessedBlock(blockHash string, height uint32, prevBlockHash string) error
 	GetHeaders() ([]*BlockHeader, error)
 }
@@ -291,19 +291,19 @@ func (d *SQLDatabase) GetBlockHeight(hash string) (uint32, error) {
 }
 
 // GetLastProcessedBlock retrieves the last processed block information
-func (d *SQLDatabase) GetLastProcessedBlock() (string, uint32, string, error) {
+func (d *SQLDatabase) GetLastProcessedBlock() (string, int64, int64, error) {
 	var blockHash string
-	var height uint32
-	var prevBlockHash string
+	var height int64
+	var timestamp int64
 	err := d.db.QueryRow(`
-		SELECT block_hash, block_height, prev_block_hash 
-		FROM last_processed_block 
-		WHERE id = 1
-	`).Scan(&blockHash, &height, &prevBlockHash)
+		SELECT block_hash, block_height, time 
+		FROM blocks 
+		WHERE height = (SELECT MAX(height) FROM blocks)
+	`).Scan(&blockHash, &height, &timestamp)
 	if err != nil {
-		return "", 0, "", err
+		return "", 0, 0, err
 	}
-	return blockHash, height, prevBlockHash, nil
+	return blockHash, height, timestamp, nil
 }
 
 // UpdateLastProcessedBlock updates the last processed block information
