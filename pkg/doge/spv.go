@@ -161,7 +161,50 @@ func (n *SPVNode) Connect(addr string) error {
 // Start begins the SPV node's operation
 func (n *SPVNode) Start() error {
 	n.logger.Println("Starting SPV node...")
-	// TODO: Implement message handling and blockchain synchronization
+
+	// Initialize message handling
+	go n.handleMessages()
+
+	// Send version message
+	if err := n.sendVersionMessage(); err != nil {
+		return fmt.Errorf("error sending version message: %v", err)
+	}
+
+	// Wait for version handshake to complete
+	select {
+	case <-n.verackReceived:
+		n.logger.Println("Version handshake completed")
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("timeout waiting for version handshake")
+	}
+
+	// Start header synchronization
+	if err := n.startHeaderSync(); err != nil {
+		return fmt.Errorf("error starting header sync: %v", err)
+	}
+
+	return nil
+}
+
+// startHeaderSync starts the header synchronization process
+func (n *SPVNode) startHeaderSync() error {
+	// Get the last known header from database
+	lastHash, height, _, err := n.db.GetLastProcessedBlock()
+	if err != nil {
+		return fmt.Errorf("error getting last processed block: %v", err)
+	}
+
+	// If we have no headers, start from genesis
+	if height == 0 {
+		lastHash = "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691"
+	}
+
+	// Send getheaders message
+	if err := n.sendGetHeaders(lastHash); err != nil {
+		return fmt.Errorf("error sending getheaders: %v", err)
+	}
+
+	n.logger.Printf("Requested headers starting from block %s at height %d", lastHash, height)
 	return nil
 }
 
@@ -418,10 +461,12 @@ func (n *SPVNode) handleHeadersMessage(msg *Message) error {
 	if count == MaxHeadersResults {
 		// Send getheaders message with the last header's hash
 		lastHeader := n.chainTip
-		hash := hex.EncodeToString(lastHeader.PrevBlock[:])
+		hashBytes := lastHeader.GetHash()
+		hash := hex.EncodeToString(hashBytes[:])
 		if err := n.sendGetHeaders(hash); err != nil {
 			return fmt.Errorf("error requesting more headers: %v", err)
 		}
+		n.logger.Printf("Requested more headers starting from block %s at height %d", hash, n.currentHeight)
 	} else {
 		n.headerSyncComplete = true
 		n.logger.Printf("Header synchronization complete at height %d", n.currentHeight)
