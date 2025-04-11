@@ -160,15 +160,27 @@ func (n *SPVNode) sendVerackMessage() error {
 
 // sendGetHeaders sends a getheaders message
 func (n *SPVNode) sendGetHeaders(blockHash string) error {
+	// Create payload
+	buf := new(bytes.Buffer)
+
+	// Version (4 bytes)
+	binary.Write(buf, binary.LittleEndian, int32(70015))
+
+	// Hash count (varint)
+	// For now, we just send one hash
+	buf.Write([]byte{0x01})
+
+	// Block locator hashes
 	hash, err := hex.DecodeString(blockHash)
 	if err != nil {
 		return fmt.Errorf("invalid block hash: %v", err)
 	}
-
-	// Create payload
-	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, int32(70015)) // Version
 	buf.Write(hash)
+
+	// Stop hash (32 bytes of zeros to get all headers)
+	stopHash := make([]byte, 32)
+	buf.Write(stopHash)
+
 	payload := buf.Bytes()
 
 	// Calculate checksum
