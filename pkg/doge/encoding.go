@@ -49,13 +49,13 @@ func DecodeBlock(data []byte) (*Block, error) {
 	offset += bytesRead
 
 	// Decode transactions
-	block.Tx = make([]Transaction, txCount)
+	block.Transactions = make([]*Transaction, txCount)
 	for i := uint64(0); i < txCount; i++ {
 		tx, err := DecodeTransaction(data[offset:])
 		if err != nil {
 			return nil, fmt.Errorf("error decoding transaction %d: %v", i, err)
 		}
-		block.Tx[i] = *tx
+		block.Transactions[i] = tx
 		offset += tx.SerializeSize()
 	}
 

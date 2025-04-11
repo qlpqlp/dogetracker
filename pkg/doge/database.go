@@ -53,8 +53,8 @@ func (d *SQLDatabase) StoreBlock(block *Block) error {
 	}
 
 	// Store transactions
-	for _, tx := range block.Tx {
-		if err := d.StoreTransaction(&tx, blockHash, block.Header.Height); err != nil {
+	for _, tx := range block.Transactions {
+		if err := d.StoreTransaction(tx, blockHash, block.Header.Height); err != nil {
 			return fmt.Errorf("error storing transaction: %v", err)
 		}
 	}
@@ -197,7 +197,7 @@ func (d *SQLDatabase) GetBlock(hash string) (*Block, error) {
 			tx.Outputs = append(tx.Outputs, output)
 		}
 
-		block.Tx = append(block.Tx, tx)
+		block.Transactions = append(block.Transactions, tx)
 	}
 
 	return &block, nil
