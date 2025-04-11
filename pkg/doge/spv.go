@@ -385,15 +385,58 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 
 // handleVersionMessage handles a version message
 func (n *SPVNode) handleVersionMessage(payload []byte) error {
-	// Parse version message
-	version := binary.LittleEndian.Uint32(payload[0:4])
-	if version < ProtocolVersion {
-		return fmt.Errorf("peer version %d is too old", version)
+	reader := bytes.NewReader(payload)
+
+	// Parse version message fields
+	var version int32
+	if err := binary.Read(reader, binary.LittleEndian, &version); err != nil {
+		return fmt.Errorf("error reading version: %v", err)
 	}
 
-	n.logger.Printf("Peer version: %d", version)
+	var services uint64
+	if err := binary.Read(reader, binary.LittleEndian, &services); err != nil {
+		return fmt.Errorf("error reading services: %v", err)
+	}
 
-	// Send verack
+	var timestamp int64
+	if err := binary.Read(reader, binary.LittleEndian, &timestamp); err != nil {
+		return fmt.Errorf("error reading timestamp: %v", err)
+	}
+
+	// Skip addr_recv and addr_from for now
+	reader.Seek(52, io.SeekCurrent)
+
+	var nonce uint64
+	if err := binary.Read(reader, binary.LittleEndian, &nonce); err != nil {
+		return fmt.Errorf("error reading nonce: %v", err)
+	}
+
+	// Read user agent length
+	userAgentLen, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return fmt.Errorf("error reading user agent length: %v", err)
+	}
+
+	// Read user agent
+	userAgent := make([]byte, userAgentLen)
+	if _, err := reader.Read(userAgent); err != nil {
+		return fmt.Errorf("error reading user agent: %v", err)
+	}
+
+	var startHeight int32
+	if err := binary.Read(reader, binary.LittleEndian, &startHeight); err != nil {
+		return fmt.Errorf("error reading start height: %v", err)
+	}
+
+	var relay bool
+	if err := binary.Read(reader, binary.LittleEndian, &relay); err != nil {
+		return fmt.Errorf("error reading relay: %v", err)
+	}
+
+	n.logger.Printf("Received version message: version=%d, services=%d, userAgent=%s, startHeight=%d",
+		version, services, string(userAgent), startHeight)
+
+	// Send verack message
 	if err := n.sendVerackMessage(); err != nil {
 		return fmt.Errorf("error sending verack: %v", err)
 	}
