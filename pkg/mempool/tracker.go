@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/dogeorg/dogetracker/pkg/doge"
-	"github.com/dogeorg/dogetracker/pkg/spec"
-	"github.com/dogeorg/dogetracker/server/db"
+	"github.com/qlpqlp/dogetracker/pkg/doge"
+	"github.com/qlpqlp/dogetracker/pkg/spec"
+	"github.com/qlpqlp/dogetracker/server/db"
 )
 
 // BlockTx is an alias for doge.Transaction

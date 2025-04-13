@@ -46,50 +46,8 @@ type UnspentOutput struct {
 
 // InitDB initializes the database schema
 func InitDB(db *sql.DB) error {
-	// Create blocks table
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS blocks (
-			hash VARCHAR(64) PRIMARY KEY,
-			height BIGINT NOT NULL,
-			version INTEGER NOT NULL,
-			prev_block VARCHAR(64) NOT NULL,
-			merkle_root VARCHAR(64) NOT NULL,
-			time BIGINT NOT NULL,
-			bits INTEGER NOT NULL,
-			nonce INTEGER NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Create last_processed_block table
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS last_processed_block (
-			id INTEGER PRIMARY KEY DEFAULT 1,
-			block_hash VARCHAR(64) NOT NULL,
-			block_height BIGINT NOT NULL,
-			prev_block_hash VARCHAR(64) NOT NULL,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Insert default row if not exists
-	_, err = db.Exec(`
-		INSERT INTO last_processed_block (id, block_hash, block_height, prev_block_hash)
-		VALUES (1, '1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691', 0, '0000000000000000000000000000000000000000000000000000000000000000')
-		ON CONFLICT (id) DO NOTHING
-	`)
-	if err != nil {
-		return err
-	}
-
 	// Create tracked_addresses table
-	_, err = db.Exec(`
+	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS tracked_addresses (
 			id SERIAL PRIMARY KEY,
 			address VARCHAR(34) UNIQUE NOT NULL,
@@ -150,28 +108,31 @@ func InitDB(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_transactions_tx_id ON transactions(tx_id);
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_address_id ON unspent_outputs(address_id);
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_tx_id ON unspent_outputs(tx_id);
-		CREATE INDEX IF NOT EXISTS idx_blocks_height ON blocks(height);
+	`)
+
+	if err != nil {
+		return err
+	}
+
+	// Create last_processed_block table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS last_processed_block (
+			id INTEGER PRIMARY KEY DEFAULT 1,
+			block_hash VARCHAR(64) NOT NULL,
+			block_height BIGINT NOT NULL,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Insert default row if not exists
+	_, err = db.Exec(`
+		INSERT INTO last_processed_block (id, block_hash, block_height)
+		VALUES (1, '0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f', 0)
+		ON CONFLICT (id) DO NOTHING
 	`)
 
 	return err
-}
-
-// StoreBlockHeader stores a block header in the database
-func StoreBlockHeader(db *sql.DB, hash string, height int64, header []byte) error {
-	_, err := db.Exec(`
-		INSERT INTO headers (hash, height, header)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (hash) DO UPDATE
-		SET height = $2, header = $3
-	`, hash, height, header)
-	return err
-}
-
-// GetBlockHeader retrieves a block header from the database
-func GetBlockHeader(db *sql.DB, hash string) ([]byte, error) {
-	var header []byte
-	err := db.QueryRow(`
-		SELECT header FROM headers WHERE hash = $1
-	`, hash).Scan(&header)
-	return header, err
 }

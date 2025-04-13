@@ -21,11 +21,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dogeorg/dogetracker/pkg/api"
-	"github.com/dogeorg/dogetracker/pkg/doge"
-	"github.com/dogeorg/dogetracker/pkg/tracker"
-	serverdb "github.com/dogeorg/dogetracker/server/db"
 	_ "github.com/lib/pq"
+	"github.com/qlpqlp/dogetracker/pkg/api"
+	"github.com/qlpqlp/dogetracker/pkg/doge"
+	"github.com/qlpqlp/dogetracker/pkg/tracker"
+	serverdb "github.com/qlpqlp/dogetracker/server/db"
 )
 
 var (
@@ -79,10 +79,7 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 		"seed.dogecoin.com:22556",  // Mainnet seed node
 		"seed.multidoge.org:22556", // Mainnet seed node
 	}
-	spvNode, err := doge.NewSPVNode(peers, uint32(0), doge.NewSQLDatabase(db), log.New(os.Stdout, "SPV: ", log.LstdFlags))
-	if err != nil {
-		return fmt.Errorf("error creating SPV node: %v", err)
-	}
+	spvNode := doge.NewSPVNode(peers, 0, doge.NewSQLDatabase(db))
 
 	// Add tracked addresses to SPV node
 	for addr := range trackedAddresses {
@@ -91,7 +88,7 @@ func ProcessBlockTransactions(block *doge.BlockchainBlock, db *sql.DB, trackedAd
 
 	// Connect to a peer
 	for _, peer := range peers {
-		if err := spvNode.Connect(peer); err != nil {
+		if err := spvNode.ConnectToPeer(peer); err != nil {
 			log.Printf("Failed to connect to %s: %v", peer, err)
 			continue
 		}
@@ -238,23 +235,15 @@ func main() {
 	}
 	defer db.Close()
 
-	// Initialize database schema
-	if err := serverdb.InitDB(db); err != nil {
-		log.Fatalf("Failed to initialize database schema: %v", err)
-	}
-
 	// Create SPV node with specified peer and start block
 	peers := []string{nodeAddr}
-	spvNode, err := doge.NewSPVNode(peers, uint32(startBlock), doge.NewSQLDatabase(db), log.New(os.Stdout, "SPV: ", log.LstdFlags))
-	if err != nil {
-		log.Fatalf("Failed to create SPV node: %v", err)
-	}
+	spvNode := doge.NewSPVNode(peers, uint32(startBlock), doge.NewSQLDatabase(db))
 
 	log.Printf("Attempting to connect to Dogecoin node at %s...", nodeAddr)
 	log.Printf("Starting from block height %d", startBlock)
 
 	// Connect to peer
-	if err := spvNode.Connect(nodeAddr); err != nil {
+	if err := spvNode.ConnectToPeer(nodeAddr); err != nil {
 		log.Fatalf("Failed to connect to peer: %v", err)
 	}
 	log.Printf("Successfully connected to peer")

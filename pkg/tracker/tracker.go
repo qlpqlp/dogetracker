@@ -10,14 +10,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"time"
 
-	"github.com/dogeorg/dogetracker/pkg/doge"
-	"github.com/dogeorg/dogetracker/pkg/spec"
-	"github.com/dogeorg/dogetracker/server/db"
+	"github.com/qlpqlp/dogetracker/pkg/doge"
+	"github.com/qlpqlp/dogetracker/pkg/spec"
 )
 
 const (
@@ -397,6 +395,44 @@ func DecodeVarInt(data []byte) (uint64, int) {
 	}
 }
 
+// storeTransaction stores a transaction in the database
+func (t *Tracker) storeTransaction(tx *doge.Transaction, addresses []string) error {
+	// Start transaction
+	dbTx, err := t.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer dbTx.Rollback()
+
+	// Insert transaction
+	_, err = dbTx.Exec(`
+		INSERT INTO transactions (txid, block_height, timestamp)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (txid) DO NOTHING
+	`, tx.TxID, 0, time.Now()) // TODO: Get block height from somewhere
+	if err != nil {
+		return err
+	}
+
+	// Insert transaction outputs
+	for _, output := range tx.Outputs {
+		// Extract addresses from ScriptPubKey
+		addresses := t.spvNode.ExtractAddresses(output.ScriptPubKey)
+		for _, addr := range addresses {
+			_, err = dbTx.Exec(`
+				INSERT INTO transaction_outputs (txid, address, value)
+				VALUES ($1, $2, $3)
+			`, tx.TxID, addr, output.Value)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// Commit transaction
+	return dbTx.Commit()
+}
+
 // ProcessBlocks processes blocks from the blockchain
 func (t *Tracker) ProcessBlocks(ctx context.Context, startBlock int64) error {
 	// Get current block height
@@ -416,18 +452,6 @@ func (t *Tracker) ProcessBlocks(ctx context.Context, startBlock int64) error {
 		if currentHeight == 0 {
 			return fmt.Errorf("no headers received after waiting")
 		}
-	}
-
-	// Get last processed block from database
-	_, lastBlockHeight, err := db.GetLastProcessedBlock(t.db)
-	if err != nil {
-		return fmt.Errorf("error getting last processed block: %v", err)
-	}
-
-	// If we have a last processed block, start from there
-	if lastBlockHeight > 0 {
-		startBlock = lastBlockHeight + 1
-		log.Printf("Resuming from block height %d", startBlock)
 	}
 
 	// Process blocks from startBlock to currentHeight
@@ -453,120 +477,14 @@ func (t *Tracker) ProcessBlocks(ctx context.Context, startBlock int64) error {
 				// Check if transaction is relevant to watched addresses
 				if t.spvNode.ProcessTransaction(tx) {
 					// Store transaction in database
-					err = t.storeTransaction(tx, blockHash, height)
+					err = t.storeTransaction(tx, []string{blockHash})
 					if err != nil {
 						return fmt.Errorf("error storing transaction %s: %v", tx.TxID, err)
 					}
 				}
 			}
-
-			// Update last processed block
-			err = db.UpdateLastProcessedBlock(t.db, blockHash, height)
-			if err != nil {
-				return fmt.Errorf("error updating last processed block: %v", err)
-			}
-
-			log.Printf("Processed block %d (%s) with %d transactions", height, blockHash, len(transactions))
 		}
 	}
 
 	return nil
-}
-
-// storeTransaction stores a transaction in the database
-func (t *Tracker) storeTransaction(tx *doge.Transaction, blockHash string, blockHeight int64) error {
-	// Start transaction
-	dbTx, err := t.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer dbTx.Rollback()
-
-	// Process inputs (outgoing transactions)
-	for _, input := range tx.Inputs {
-		// Skip coinbase transactions
-		if len(input.PreviousOutput.Hash) == 0 {
-			continue
-		}
-
-		// Get the previous transaction output
-		prevTxID := hex.EncodeToString(input.PreviousOutput.Hash[:])
-		prevVout := input.PreviousOutput.Index
-
-		// Check if this output belongs to a tracked address
-		var addressID int64
-		err := dbTx.QueryRow(`
-			SELECT address_id 
-			FROM unspent_outputs 
-			WHERE tx_id = $1 AND vout = $2
-		`, prevTxID, prevVout).Scan(&addressID)
-
-		if err == nil {
-			// This is a spent output from a tracked address
-			// Create outgoing transaction
-			_, err = dbTx.Exec(`
-				INSERT INTO transactions (
-					address_id, tx_id, block_hash, block_height, 
-					amount, is_incoming, confirmations, status
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-				ON CONFLICT (address_id, tx_id) DO UPDATE 
-				SET block_hash = $3, block_height = $4, confirmations = $7, status = $8
-			`, addressID, tx.TxID, blockHash, blockHeight,
-				-1, false, 1, "confirmed")
-			if err != nil {
-				return err
-			}
-
-			// Remove the spent output
-			_, err = dbTx.Exec(`
-				DELETE FROM unspent_outputs 
-				WHERE address_id = $1 AND tx_id = $2 AND vout = $3
-			`, addressID, prevTxID, prevVout)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	// Process outputs (incoming transactions)
-	for i, output := range tx.Outputs {
-		// Extract addresses from ScriptPubKey
-		addresses := t.spvNode.ExtractAddresses(output.ScriptPubKey)
-		for _, addr := range addresses {
-			// Get or create address
-			addrInfo, err := db.GetOrCreateAddress(t.db, addr)
-			if err != nil {
-				return err
-			}
-
-			// Create incoming transaction
-			_, err = dbTx.Exec(`
-				INSERT INTO transactions (
-					address_id, tx_id, block_hash, block_height, 
-					amount, is_incoming, confirmations, status
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-				ON CONFLICT (address_id, tx_id) DO UPDATE 
-				SET block_hash = $3, block_height = $4, confirmations = $7, status = $8
-			`, addrInfo.ID, tx.TxID, blockHash, blockHeight,
-				float64(output.Value)/1e8, true, 1, "confirmed")
-			if err != nil {
-				return err
-			}
-
-			// Add unspent output
-			_, err = dbTx.Exec(`
-				INSERT INTO unspent_outputs (
-					address_id, tx_id, vout, amount, script
-				) VALUES ($1, $2, $3, $4, $5)
-				ON CONFLICT (address_id, tx_id, vout) DO UPDATE 
-				SET amount = $4, script = $5
-			`, addrInfo.ID, tx.TxID, i, float64(output.Value)/1e8, hex.EncodeToString(output.ScriptPubKey))
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	// Commit transaction
-	return dbTx.Commit()
 }

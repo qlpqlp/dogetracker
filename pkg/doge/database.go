@@ -7,16 +7,6 @@ import (
 	"fmt"
 )
 
-// Database interface defines the methods required for storing and retrieving blockchain data
-type Database interface {
-	GetBlock(hash string) (*Block, error)
-	StoreBlock(block *Block) error
-	GetTransaction(txid string) (*Transaction, error)
-	StoreTransaction(tx *Transaction, blockHash string, height uint32) error
-	GetLastProcessedBlock() (string, uint32, string, error)
-	Close() error
-}
-
 // BlockDatabase interface for storing blocks and transactions
 type BlockDatabase interface {
 	StoreBlock(block *Block) error
@@ -24,9 +14,7 @@ type BlockDatabase interface {
 	GetBlock(hash string) (*Block, error)
 	GetTransaction(txid string) (*Transaction, error)
 	GetBlockHeight(hash string) (uint32, error)
-	GetLastProcessedBlock() (string, int64, int64, error) // Returns (blockHash, height, timestamp)
-	UpdateLastProcessedBlock(blockHash string, height uint32, prevBlockHash string) error
-	GetHeaders() ([]*BlockHeader, error)
+	GetLastProcessedBlock() (int64, error)
 }
 
 // SQLDatabase implements the BlockDatabase interface using SQL
@@ -300,69 +288,16 @@ func (d *SQLDatabase) GetBlockHeight(hash string) (uint32, error) {
 	return height, nil
 }
 
-// GetLastProcessedBlock retrieves the last processed block information
-func (d *SQLDatabase) GetLastProcessedBlock() (string, int64, int64, error) {
-	var hash string
-	var height int64
-	var timestamp int64
-
+// GetLastProcessedBlock retrieves the last processed block height
+func (d *SQLDatabase) GetLastProcessedBlock() (int64, error) {
+	var blockHeight int64
 	err := d.db.QueryRow(`
-		SELECT hash, height, EXTRACT(EPOCH FROM created_at)::bigint
-		FROM blocks
-		ORDER BY height DESC
-		LIMIT 1
-	`).Scan(&hash, &height, &timestamp)
-
-	if err == sql.ErrNoRows {
-		return "", 0, 0, nil
-	}
-	if err != nil {
-		return "", 0, 0, fmt.Errorf("error getting last processed block: %v", err)
-	}
-
-	return hash, height, timestamp, nil
-}
-
-// UpdateLastProcessedBlock updates the last processed block information
-func (d *SQLDatabase) UpdateLastProcessedBlock(blockHash string, height uint32, prevBlockHash string) error {
-	_, err := d.db.Exec(`
-		UPDATE last_processed_block 
-		SET block_hash = $1, block_height = $2, prev_block_hash = $3, updated_at = CURRENT_TIMESTAMP
+		SELECT block_height 
+		FROM last_processed_block 
 		WHERE id = 1
-	`, blockHash, height, prevBlockHash)
-	return err
-}
-
-// GetHeaders retrieves all block headers from the database
-func (d *SQLDatabase) GetHeaders() ([]*BlockHeader, error) {
-	rows, err := d.db.Query(`
-		SELECT height, version, prev_block, merkle_root, time, bits, nonce
-		FROM blocks
-		ORDER BY height
-	`)
+	`).Scan(&blockHeight)
 	if err != nil {
-		return nil, fmt.Errorf("error querying headers: %v", err)
+		return 0, err
 	}
-	defer rows.Close()
-
-	var headers []*BlockHeader
-	for rows.Next() {
-		var header BlockHeader
-		var prevBlock, merkleRoot []byte
-		err := rows.Scan(&header.Height, &header.Version, &prevBlock,
-			&merkleRoot, &header.Time, &header.Bits, &header.Nonce)
-		if err != nil {
-			return nil, fmt.Errorf("error scanning header: %v", err)
-		}
-		copy(header.PrevBlock[:], prevBlock)
-		copy(header.MerkleRoot[:], merkleRoot)
-		headers = append(headers, &header)
-	}
-
-	return headers, nil
-}
-
-// Close closes the database connection
-func (s *SQLDatabase) Close() error {
-	return s.db.Close()
+	return blockHeight, nil
 }
