@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/dogeorg/dogetracker/server/db"
@@ -33,7 +34,7 @@ func (s *Server) Start(port int) error {
 	http.HandleFunc("/api/track", s.authMiddleware(TrackAddressHandler))
 	http.HandleFunc("/api/address/", s.authMiddleware(s.handleGetAddress))
 
-	return http.ListenAndServe(":"+string(port), nil)
+	return http.ListenAndServe(":"+strconv.Itoa(port), nil)
 }
 
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
