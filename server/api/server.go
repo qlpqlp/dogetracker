@@ -15,6 +15,8 @@ type Server struct {
 }
 
 func NewServer(db *sql.DB, apiToken string) *Server {
+	// Set the database connection for the handlers
+	SetDB(db)
 	return &Server{
 		db:       db,
 		apiToken: apiToken,
@@ -28,7 +30,7 @@ func (s *Server) Start(port int) error {
 	}
 
 	// Setup routes
-	http.HandleFunc("/api/track", s.authMiddleware(s.handleTrackAddress))
+	http.HandleFunc("/api/track", s.authMiddleware(TrackAddressHandler))
 	http.HandleFunc("/api/address/", s.authMiddleware(s.handleGetAddress))
 
 	return http.ListenAndServe(":"+string(port), nil)
@@ -52,43 +54,10 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-type TrackRequest struct {
-	Address string `json:"address"`
-}
-
 type AddressResponse struct {
 	Address        *db.TrackedAddress `json:"address"`
 	Transactions   []db.Transaction   `json:"transactions"`
 	UnspentOutputs []db.UnspentOutput `json:"unspent_outputs"`
-}
-
-func (s *Server) handleTrackAddress(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req TrackRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Get or create address and return details
-	addr, transactions, unspentOutputs, err := db.GetAddressDetails(s.db, req.Address)
-	if err != nil {
-		http.Error(w, "Error processing request", http.StatusInternalServerError)
-		return
-	}
-
-	response := AddressResponse{
-		Address:        addr,
-		Transactions:   transactions,
-		UnspentOutputs: unspentOutputs,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
 }
 
 func (s *Server) handleGetAddress(w http.ResponseWriter, r *http.Request) {
