@@ -53,8 +53,10 @@ func (t *MempoolTracker) IsAddressTracked(address string) bool {
 	return t.trackedAddresses[address]
 }
 
+// AddTrackedAddress adds an address to the list of tracked addresses
 func (t *MempoolTracker) AddTrackedAddress(address string) {
 	t.trackedAddresses[address] = true
+	log.Printf("Added address to tracking: %s", address)
 }
 
 func (t *MempoolTracker) RemoveTrackedAddress(address string) {
@@ -73,6 +75,8 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 	if err != nil {
 		return fmt.Errorf("failed to decode transaction: %v", err)
 	}
+
+	log.Printf("Processing transaction %s with %d inputs and %d outputs", txID, len(txDetails.Vin), len(txDetails.Vout))
 
 	// Track all addresses involved in the transaction
 	involvedAddresses := make(map[string]bool)
@@ -97,6 +101,7 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 				if len(prevOut.ScriptPubKey.Addresses) > 0 {
 					fromAddr := prevOut.ScriptPubKey.Addresses[0]
 					involvedAddresses[fromAddr] = true
+					log.Printf("Found from address: %s (tracked: %v)", fromAddr, t.IsAddressTracked(fromAddr))
 
 					if t.IsAddressTracked(fromAddr) {
 						// Get or create address
@@ -120,6 +125,8 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 						}
 						if err := db.AddTransaction(t.db, tx); err != nil {
 							log.Printf("Failed to create outgoing transaction: %v", err)
+						} else {
+							log.Printf("Created outgoing transaction for %s: %f DOGE", fromAddr, -prevOut.Value)
 						}
 
 						// Remove the spent output from unspent_outputs
@@ -137,6 +144,7 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 		if len(vout.ScriptPubKey.Addresses) > 0 {
 			toAddr := vout.ScriptPubKey.Addresses[0]
 			involvedAddresses[toAddr] = true
+			log.Printf("Found to address: %s (tracked: %v)", toAddr, t.IsAddressTracked(toAddr))
 
 			if t.IsAddressTracked(toAddr) {
 				// Get or create address
@@ -169,6 +177,8 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 				}
 				if err := db.AddTransaction(t.db, tx); err != nil {
 					log.Printf("Failed to create incoming transaction: %v", err)
+				} else {
+					log.Printf("Created incoming transaction for %s: %f DOGE", toAddr, vout.Value)
 				}
 
 				// Add unspent output
@@ -223,6 +233,9 @@ func (t *MempoolTracker) Start(startBlock string) error {
 	}
 	log.Printf("Current block height: %d", currentHeight)
 
+	// Start mempool monitoring in a separate goroutine
+	go t.monitorMempool()
+
 	// Process blocks from start height to current height
 	for height := startHeight; height <= currentHeight; height++ {
 		log.Printf("Processing block %d", height)
@@ -264,14 +277,13 @@ func (t *MempoolTracker) Start(startBlock string) error {
 		}
 	}
 
-	// Start monitoring mempool in a separate goroutine
-	go t.monitorMempool()
-
 	return nil
 }
 
 // monitorMempool monitors the mempool for new transactions
 func (t *MempoolTracker) monitorMempool() {
+	log.Printf("Starting mempool monitoring")
+
 	for {
 		// Get mempool transactions
 		txIDs, err := t.client.GetRawMempool()
@@ -283,6 +295,11 @@ func (t *MempoolTracker) monitorMempool() {
 
 		// Process each transaction in the mempool
 		for _, txID := range txIDs {
+			// Skip if transaction is already processed
+			if t.isTransactionProcessed(txID) {
+				continue
+			}
+
 			// Get transaction details
 			txHex, err := t.client.GetRawTransaction(txID)
 			if err != nil {
@@ -324,83 +341,101 @@ func (t *MempoolTracker) monitorMempool() {
 				address := prevOutput.ScriptPubKey.Addresses[0]
 
 				// Check if address is tracked
-				var trackedAddress TrackedAddress
-				err = t.db.QueryRow("SELECT id, address, balance, required_confirmations FROM tracked_addresses WHERE address = $1", address).Scan(
-					&trackedAddress.ID, &trackedAddress.Address, &trackedAddress.Balance, &trackedAddress.RequiredConfirmations)
-				if err != nil {
-					if err == sql.ErrNoRows {
+				if t.IsAddressTracked(address) {
+					// Get or create address
+					addr, err := db.GetOrCreateAddress(t.db, address)
+					if err != nil {
+						log.Printf("Failed to get or create address: %v", err)
 						continue
 					}
-					log.Printf("Failed to query tracked address %s: %v", address, err)
-					continue
-				}
 
-				// Create outgoing transaction with 0 confirmations
-				amount := -prevOutput.Value
-				_, err = t.db.Exec(`
-					INSERT INTO transactions (tx_id, address, amount, block_height, confirmations, status)
-					VALUES ($1, $2, $3, NULL, 0, 'confirmed')
-					ON CONFLICT (tx_id, address) DO NOTHING
-				`, txID, address, amount)
-				if err != nil {
-					log.Printf("Failed to insert transaction %s: %v", txID, err)
-					continue
-				}
-
-				// Update address balance
-				_, err = t.db.Exec(`
-					UPDATE tracked_addresses
-					SET balance = balance + $1,
-						last_updated = CURRENT_TIMESTAMP
-					WHERE address = $2
-				`, amount, address)
-				if err != nil {
-					log.Printf("Failed to update address balance %s: %v", address, err)
-					continue
+					// Create outgoing transaction with 0 confirmations
+					tx := &db.Transaction{
+						AddressID:     addr.ID,
+						TxID:          txID,
+						Amount:        -prevOutput.Value, // Negative for outgoing
+						BlockHash:     "",                // Empty for mempool transactions
+						BlockHeight:   0,                 // 0 for mempool transactions
+						IsIncoming:    false,
+						Confirmations: 0,
+						FromAddress:   address,
+						ToAddress:     "", // Will be set when processing outputs
+					}
+					if err := db.AddTransaction(t.db, tx); err != nil {
+						log.Printf("Failed to create outgoing transaction: %v", err)
+					} else {
+						log.Printf("Created outgoing mempool transaction for %s: %f DOGE", address, -prevOutput.Value)
+					}
 				}
 			}
 
 			// Process transaction outputs (incoming transactions)
-			for _, output := range tx.Vout {
+			for i, output := range tx.Vout {
 				if len(output.ScriptPubKey.Addresses) == 0 {
 					continue
 				}
 				address := output.ScriptPubKey.Addresses[0]
 
 				// Check if address is tracked
-				var trackedAddress TrackedAddress
-				err = t.db.QueryRow("SELECT id, address, balance, required_confirmations FROM tracked_addresses WHERE address = $1", address).Scan(
-					&trackedAddress.ID, &trackedAddress.Address, &trackedAddress.Balance, &trackedAddress.RequiredConfirmations)
-				if err != nil {
-					if err == sql.ErrNoRows {
+				if t.IsAddressTracked(address) {
+					// Get or create address
+					addr, err := db.GetOrCreateAddress(t.db, address)
+					if err != nil {
+						log.Printf("Failed to get or create address: %v", err)
 						continue
 					}
-					log.Printf("Failed to query tracked address %s: %v", address, err)
-					continue
-				}
 
-				// Create incoming transaction with 0 confirmations
-				amount := output.Value
-				_, err = t.db.Exec(`
-					INSERT INTO transactions (tx_id, address, amount, block_height, confirmations, status)
-					VALUES ($1, $2, $3, NULL, 0, 'confirmed')
-					ON CONFLICT (tx_id, address) DO NOTHING
-				`, txID, address, amount)
-				if err != nil {
-					log.Printf("Failed to insert transaction %s: %v", txID, err)
-					continue
-				}
+					// Find the from_address for this output
+					var fromAddr string
+					for _, input := range tx.Vin {
+						if input.TxID != "" {
+							prevTxHex, err := t.client.GetRawTransaction(input.TxID)
+							if err != nil {
+								continue
+							}
+							prevTx, err := t.client.DecodeRawTransaction(prevTxHex)
+							if err != nil {
+								continue
+							}
+							if input.Vout < uint32(len(prevTx.Vout)) {
+								prevOut := prevTx.Vout[input.Vout]
+								if len(prevOut.ScriptPubKey.Addresses) > 0 {
+									fromAddr = prevOut.ScriptPubKey.Addresses[0]
+									break
+								}
+							}
+						}
+					}
 
-				// Update address balance
-				_, err = t.db.Exec(`
-					UPDATE tracked_addresses
-					SET balance = balance + $1,
-						last_updated = CURRENT_TIMESTAMP
-					WHERE address = $2
-				`, amount, address)
-				if err != nil {
-					log.Printf("Failed to update address balance %s: %v", address, err)
-					continue
+					// Create incoming transaction with 0 confirmations
+					tx := &db.Transaction{
+						AddressID:     addr.ID,
+						TxID:          txID,
+						Amount:        output.Value, // Positive for incoming
+						BlockHash:     "",           // Empty for mempool transactions
+						BlockHeight:   0,            // 0 for mempool transactions
+						IsIncoming:    true,
+						Confirmations: 0,
+						FromAddress:   fromAddr,
+						ToAddress:     address,
+					}
+					if err := db.AddTransaction(t.db, tx); err != nil {
+						log.Printf("Failed to create incoming transaction: %v", err)
+					} else {
+						log.Printf("Created incoming mempool transaction for %s: %f DOGE", address, output.Value)
+					}
+
+					// Add unspent output
+					output := &db.UnspentOutput{
+						AddressID: addr.ID,
+						TxID:      txID,
+						Vout:      i,
+						Amount:    output.Value,
+						Script:    output.ScriptPubKey.Hex,
+					}
+					if err := db.AddUnspentOutput(t.db, output); err != nil {
+						log.Printf("Failed to add unspent output: %v", err)
+					}
 				}
 			}
 		}

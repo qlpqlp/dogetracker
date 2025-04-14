@@ -161,7 +161,8 @@ func main() {
 
 	// Set up API server
 	api.SetDB(dbConn)
-	api.SetToken(config.apiToken) // Set the API token
+	api.SetToken(config.apiToken)
+	api.SetTracker(tracker)
 	http.HandleFunc("/api/track", api.TrackAddressHandler)
 	http.HandleFunc("/api/balance", func(w http.ResponseWriter, r *http.Request) {
 		// TODO: Implement balance handler

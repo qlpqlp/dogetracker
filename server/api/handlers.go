@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/dogeorg/dogetracker/server/db"
+	"github.com/dogeorg/dogetracker/server/mempool"
 )
 
 var (
 	dbConn   *sql.DB
 	apiToken string
+	tracker  *mempool.MempoolTracker
 )
 
 // SetDB sets the database connection
@@ -23,6 +25,11 @@ func SetDB(db *sql.DB) {
 // SetToken sets the API token
 func SetToken(token string) {
 	apiToken = token
+}
+
+// SetTracker sets the mempool tracker instance
+func SetTracker(t *mempool.MempoolTracker) {
+	tracker = t
 }
 
 // TrackAddressRequest represents a request to track a new address
@@ -79,6 +86,14 @@ func TrackAddressHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to add address: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	// Add address to mempool tracker
+	if tracker != nil {
+		tracker.AddTrackedAddress(req.Address)
+		log.Printf("Added address to mempool tracker: %s", req.Address)
+	} else {
+		log.Printf("Warning: Mempool tracker not initialized")
 	}
 
 	// Return success response
