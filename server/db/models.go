@@ -100,10 +100,11 @@ func InitDB(db *sql.DB) error {
 	// Create last_processed_block table
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS last_processed_block (
-			id SERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY DEFAULT 1,
 			block_height BIGINT NOT NULL,
 			block_hash VARCHAR(64) NOT NULL,
-			processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			CONSTRAINT single_row CHECK (id = 1)
 		)
 	`)
 	if err != nil {

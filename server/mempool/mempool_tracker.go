@@ -74,10 +74,10 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 		return fmt.Errorf("failed to decode transaction: %v", err)
 	}
 
-	// Create a map to store from_addresses for each output
-	fromAddresses := make(map[int]string)
+	// Track all addresses involved in the transaction
+	involvedAddresses := make(map[string]bool)
 
-	// Process transaction inputs first to get from_addresses
+	// Process inputs first to get from_addresses
 	for _, vin := range txDetails.Vin {
 		if vin.TxID != "" { // Skip coinbase
 			prevTx, err := t.client.GetRawTransaction(vin.TxID)
@@ -96,8 +96,7 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 				prevOut := prevTxDetails.Vout[vin.Vout]
 				if len(prevOut.ScriptPubKey.Addresses) > 0 {
 					fromAddr := prevOut.ScriptPubKey.Addresses[0]
-					// Store the from_address for this input
-					fromAddresses[int(vin.Vout)] = fromAddr
+					involvedAddresses[fromAddr] = true
 
 					if t.IsAddressTracked(fromAddr) {
 						// Get or create address
@@ -133,10 +132,12 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 		}
 	}
 
-	// Process outputs to get to_address and add unspent outputs
+	// Process outputs to get to_addresses and add unspent outputs
 	for i, vout := range txDetails.Vout {
 		if len(vout.ScriptPubKey.Addresses) > 0 {
 			toAddr := vout.ScriptPubKey.Addresses[0]
+			involvedAddresses[toAddr] = true
+
 			if t.IsAddressTracked(toAddr) {
 				// Get or create address
 				addr, err := db.GetOrCreateAddress(t.db, toAddr)
@@ -145,8 +146,14 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 					continue
 				}
 
-				// Get the from_address for this output
-				fromAddr := fromAddresses[i]
+				// Find the from_address for this output
+				var fromAddr string
+				for addr := range involvedAddresses {
+					if addr != toAddr {
+						fromAddr = addr
+						break
+					}
+				}
 
 				// Create incoming transaction
 				tx := &db.Transaction{
