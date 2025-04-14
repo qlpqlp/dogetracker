@@ -174,158 +174,35 @@ func (t *MempoolTracker) Start(startBlock string) error {
 
 	// Process blocks from start height to current height
 	for height := startHeight; height <= currentHeight; height++ {
+		log.Printf("Processing block %d", height)
+
 		// Get block hash
 		blockHash, err := t.client.GetBlockHash(height)
 		if err != nil {
-			return fmt.Errorf("failed to get block hash for height %d: %v", height, err)
+			log.Printf("Failed to get block hash for height %d: %v", height, err)
+			continue
 		}
 
 		// Get block details
 		block, err := t.client.GetBlockVerbose(blockHash)
 		if err != nil {
-			return fmt.Errorf("failed to get block %s: %v", blockHash, err)
+			log.Printf("Failed to get block %s: %v", blockHash, err)
+			continue
 		}
 
 		// Process each transaction in the block
 		for _, tx := range block.Tx {
-			// Get transaction details
-			txHex, err := t.client.GetRawTransaction(tx.TxID)
-			if err != nil {
-				log.Printf("Failed to get transaction %s: %v", tx.TxID, err)
+			log.Printf("Processing transaction %s", tx.TxID)
+
+			// Process transaction
+			if err := t.processTransaction(tx.TxID, blockHash, height); err != nil {
+				log.Printf("Failed to process transaction %s: %v", tx.TxID, err)
 				continue
-			}
-
-			// Decode transaction
-			txDetails, err := t.client.DecodeRawTransaction(txHex)
-			if err != nil {
-				log.Printf("Failed to decode transaction %s: %v", tx.TxID, err)
-				continue
-			}
-
-			// Process transaction inputs (outgoing transactions)
-			for _, input := range txDetails.Vin {
-				if input.TxID == "" { // Skip coinbase inputs
-					continue
-				}
-
-				// Get the previous transaction output
-				prevTxHex, err := t.client.GetRawTransaction(input.TxID)
-				if err != nil {
-					log.Printf("Failed to get previous transaction %s: %v", input.TxID, err)
-					continue
-				}
-
-				prevTx, err := t.client.DecodeRawTransaction(prevTxHex)
-				if err != nil {
-					log.Printf("Failed to decode previous transaction %s: %v", input.TxID, err)
-					continue
-				}
-
-				// Get the address from the previous output
-				prevOutput := prevTx.Vout[input.Vout]
-				if len(prevOutput.ScriptPubKey.Addresses) == 0 {
-					continue
-				}
-				address := prevOutput.ScriptPubKey.Addresses[0]
-
-				// Check if address is tracked
-				var trackedAddress TrackedAddress
-				err = t.db.QueryRow("SELECT id, address, balance, required_confirmations FROM tracked_addresses WHERE address = $1", address).Scan(
-					&trackedAddress.ID, &trackedAddress.Address, &trackedAddress.Balance, &trackedAddress.RequiredConfirmations)
-				if err != nil {
-					if err == sql.ErrNoRows {
-						continue
-					}
-					log.Printf("Failed to query tracked address %s: %v", address, err)
-					continue
-				}
-
-				// Create outgoing transaction
-				amount := -prevOutput.Value
-				confirmations := int(currentHeight - height + 1)
-				status := "pending"
-				if confirmations >= trackedAddress.RequiredConfirmations {
-					status = "confirmed"
-				}
-
-				_, err = t.db.Exec(`
-					INSERT INTO transactions (tx_id, address, amount, block_height, confirmations, status)
-					VALUES ($1, $2, $3, $4, $5, $6)
-					ON CONFLICT (tx_id, address) DO UPDATE
-					SET confirmations = $5, status = $6, updated_at = CURRENT_TIMESTAMP
-				`, tx.TxID, address, amount, height, confirmations, status)
-				if err != nil {
-					log.Printf("Failed to insert transaction %s: %v", tx.TxID, err)
-					continue
-				}
-
-				// Update address balance
-				_, err = t.db.Exec(`
-					UPDATE tracked_addresses
-					SET balance = balance + $1,
-						last_updated = CURRENT_TIMESTAMP
-					WHERE address = $2
-				`, amount, address)
-				if err != nil {
-					log.Printf("Failed to update address balance %s: %v", address, err)
-					continue
-				}
-			}
-
-			// Process transaction outputs (incoming transactions)
-			for _, output := range txDetails.Vout {
-				if len(output.ScriptPubKey.Addresses) == 0 {
-					continue
-				}
-				address := output.ScriptPubKey.Addresses[0]
-
-				// Check if address is tracked
-				var trackedAddress TrackedAddress
-				err = t.db.QueryRow("SELECT id, address, balance, required_confirmations FROM tracked_addresses WHERE address = $1", address).Scan(
-					&trackedAddress.ID, &trackedAddress.Address, &trackedAddress.Balance, &trackedAddress.RequiredConfirmations)
-				if err != nil {
-					if err == sql.ErrNoRows {
-						continue
-					}
-					log.Printf("Failed to query tracked address %s: %v", address, err)
-					continue
-				}
-
-				// Create incoming transaction
-				amount := output.Value
-				confirmations := int(currentHeight - height + 1)
-				status := "pending"
-				if confirmations >= trackedAddress.RequiredConfirmations {
-					status = "confirmed"
-				}
-
-				_, err = t.db.Exec(`
-					INSERT INTO transactions (tx_id, address, amount, block_height, confirmations, status)
-					VALUES ($1, $2, $3, $4, $5, $6)
-					ON CONFLICT (tx_id, address) DO UPDATE
-					SET confirmations = $5, status = $6, updated_at = CURRENT_TIMESTAMP
-				`, tx.TxID, address, amount, height, confirmations, status)
-				if err != nil {
-					log.Printf("Failed to insert transaction %s: %v", tx.TxID, err)
-					continue
-				}
-
-				// Update address balance
-				_, err = t.db.Exec(`
-					UPDATE tracked_addresses
-					SET balance = balance + $1,
-						last_updated = CURRENT_TIMESTAMP
-					WHERE address = $2
-				`, amount, address)
-				if err != nil {
-					log.Printf("Failed to update address balance %s: %v", address, err)
-					continue
-				}
 			}
 		}
 	}
 
-	// Start monitoring mempool
+	// Start monitoring mempool in a separate goroutine
 	go t.monitorMempool()
 
 	return nil
