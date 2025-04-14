@@ -14,6 +14,7 @@ import (
 	"github.com/dogeorg/doge"
 	"github.com/dogeorg/dogetracker/pkg/chaser"
 	"github.com/dogeorg/dogetracker/pkg/core"
+	"github.com/dogeorg/dogetracker/pkg/migrate"
 	"github.com/dogeorg/dogetracker/pkg/walker"
 	"github.com/dogeorg/dogetracker/server/api"
 	_ "github.com/lib/pq"
@@ -110,6 +111,11 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
+
+	// Run migrations
+	if err := migrate.RunMigrations(db, "migrations"); err != nil {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
 
 	// Start API server
 	apiServer := api.NewServer(db, config.apiToken)
