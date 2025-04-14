@@ -159,6 +159,23 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 func (t *MempoolTracker) Start(startBlock string) error {
 	log.Printf("Starting mempool tracker from block %s", startBlock)
 
+	// Load tracked addresses from database
+	rows, err := t.db.Query("SELECT address FROM tracked_addresses")
+	if err != nil {
+		return fmt.Errorf("failed to load tracked addresses: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			log.Printf("Failed to scan tracked address: %v", err)
+			continue
+		}
+		t.AddTrackedAddress(address)
+		log.Printf("Loaded tracked address: %s", address)
+	}
+
 	// Parse start block height
 	startHeight, err := strconv.ParseInt(startBlock, 10, 64)
 	if err != nil {
