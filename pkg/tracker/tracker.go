@@ -14,11 +14,12 @@ import (
 	"log"
 	"time"
 
-	"github.com/dogeorg/dogetracker/pkg/doge"
+	"github.com/dogeorg/dogetracker/pkg/core"
 	"github.com/dogeorg/dogetracker/pkg/spec"
 )
 
 const (
+	MAX_RETRIES = 3
 	RETRY_DELAY = 5 * time.Second // for RPC and Database errors.
 )
 
@@ -63,17 +64,17 @@ type DogeTracker struct {
 	fullUndoBlocks bool            // fully decode blocks in UndoForkBlocks
 }
 
-// Tracker handles block processing and transaction tracking
+// Tracker tracks Dogecoin addresses and their transactions
 type Tracker struct {
-	db      *sql.DB
-	spvNode *doge.SPVNode
+	db     *sql.DB
+	client spec.Blockchain
 }
 
 // NewTracker creates a new tracker
-func NewTracker(db *sql.DB, spvNode *doge.SPVNode) *Tracker {
+func NewTracker(db *sql.DB, client spec.Blockchain) *Tracker {
 	return &Tracker{
-		db:      db,
-		spvNode: spvNode,
+		db:     db,
+		client: client,
 	}
 }
 
@@ -417,7 +418,7 @@ func (t *Tracker) storeTransaction(tx *doge.Transaction, addresses []string) err
 	// Insert transaction outputs
 	for _, output := range tx.Outputs {
 		// Extract addresses from ScriptPubKey
-		addresses := t.spvNode.ExtractAddresses(output.ScriptPubKey)
+		addresses := core.ExtractAddresses(output.ScriptPubKey)
 		for _, addr := range addresses {
 			_, err = dbTx.Exec(`
 				INSERT INTO transaction_outputs (txid, address, value)
@@ -436,7 +437,7 @@ func (t *Tracker) storeTransaction(tx *doge.Transaction, addresses []string) err
 // ProcessBlocks processes blocks from the blockchain
 func (t *Tracker) ProcessBlocks(ctx context.Context, startBlock int64) error {
 	// Get current block height
-	currentHeight, err := t.spvNode.GetBlockCount()
+	currentHeight, err := t.client.GetBlockCount()
 	if err != nil {
 		return fmt.Errorf("error getting block count: %v", err)
 	}
@@ -445,7 +446,7 @@ func (t *Tracker) ProcessBlocks(ctx context.Context, startBlock int64) error {
 	if currentHeight == 0 {
 		log.Printf("Waiting for headers...")
 		time.Sleep(5 * time.Second)
-		currentHeight, err = t.spvNode.GetBlockCount()
+		currentHeight, err = t.client.GetBlockCount()
 		if err != nil {
 			return fmt.Errorf("error getting block count: %v", err)
 		}

@@ -1,31 +1,23 @@
 package main
 
 import (
-	"log"
-	"os"
+	"flag"
 
-	"github.com/dogeorg/dogetracker/pkg/doge"
+	"github.com/dogeorg/dogetracker/pkg/core"
 )
 
 func main() {
-	logger := log.New(os.Stdout, "SPV: ", log.LstdFlags)
+	// Parse command line flags
+	rpcHost := flag.String("rpc-host", "127.0.0.1", "Dogecoin RPC host")
+	rpcPort := flag.Int("rpc-port", 22555, "Dogecoin RPC port")
+	rpcUser := flag.String("rpc-user", "dogecoin", "Dogecoin RPC username")
+	rpcPass := flag.String("rpc-pass", "dogecoin", "Dogecoin RPC password")
 
-	// Create a new SPV node
-	node, err := doge.NewSPVNode(logger)
-	if err != nil {
-		logger.Fatalf("Failed to create SPV node: %v", err)
-	}
+	flag.Parse()
 
-	// Connect to a Dogecoin node
-	if err := node.Connect("seed.dogecoin.com:22556"); err != nil {
-		logger.Fatalf("Failed to connect: %v", err)
-	}
+	// Create RPC client
+	client := core.NewCoreRPCClient(*rpcHost, *rpcPort, *rpcUser, *rpcPass)
 
-	// Start the node
-	if err := node.Start(); err != nil {
-		logger.Fatalf("Failed to start node: %v", err)
-	}
-
-	// Wait for the node to stop
-	<-node.Done()
+	// TODO: Initialize database and tracker
+	// TODO: Start processing blocks and transactions
 }
