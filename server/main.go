@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/dogeorg/dogetracker/pkg/chaser"
 	"github.com/dogeorg/dogetracker/pkg/core"
@@ -129,22 +130,25 @@ func main() {
 		}
 	}
 
-	// Watch for new blocks.
+	// Set up ZMQ listener for new blocks (but don't wait for it)
 	zmqTip, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
 	if err != nil {
 		log.Printf("CoreZMQListener: %v", err)
 		os.Exit(1)
 	}
-	tipChanged := chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
+	_ = chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
 
-	// Process blocks
+	// Process blocks in a separate goroutine
 	go func() {
 		currentHeight := int64(*startBlock)
+		ticker := time.NewTicker(5 * time.Second) // Check for new blocks every 5 seconds
+		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-tipChanged:
+			case <-ticker.C:
 				// Get current block height
 				blockCount, err := blockchain.GetBlockCount()
 				if err != nil {
