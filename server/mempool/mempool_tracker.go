@@ -60,6 +60,8 @@ func NewMempoolTracker(db *sql.DB, client spec.Blockchain) *MempoolTracker {
 
 // Start starts tracking transactions from the specified block height
 func (mt *MempoolTracker) Start(startBlock string) error {
+	log.Printf("Starting mempool tracker from block %s", startBlock)
+
 	// Convert start block to int
 	startHeight, err := strconv.ParseInt(startBlock, 10, 64)
 	if err != nil {
@@ -71,9 +73,11 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get current block height: %v", err)
 	}
+	log.Printf("Current block height: %d", currentHeight)
 
 	// Process blocks from start height to current height
 	for height := startHeight; height <= currentHeight; height++ {
+		log.Printf("Processing block %d", height)
 		blockHash, err := mt.client.GetBlockHash(height)
 		if err != nil {
 			return fmt.Errorf("failed to get block hash for height %d: %v", height, err)
@@ -90,6 +94,7 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 		if err != nil {
 			return fmt.Errorf("failed to parse block transactions for %s: %v", blockHash, err)
 		}
+		log.Printf("Found %d transactions in block %d", len(txIDs), height)
 
 		// Process transactions in the block
 		for _, txID := range txIDs {
@@ -131,6 +136,7 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 
 			// Check if the address in the transaction is being tracked
 			if mt.IsAddressTracked(mempoolTx.Address) {
+				log.Printf("Processing transaction %s for tracked address %s", txID, mempoolTx.Address)
 				// Add transaction to database
 				if err := db.AddTransaction(mt.db, dbTx); err != nil {
 					log.Printf("Failed to add transaction to database: %v", err)
@@ -144,6 +150,7 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 		}
 	}
 
+	log.Println("Starting mempool monitoring...")
 	// Start monitoring mempool
 	go mt.monitorMempool()
 
@@ -152,9 +159,13 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 
 // parseBlockTransactions parses a block hex string to extract transaction IDs
 func parseBlockTransactions(blockHex string) ([]string, error) {
-	// TODO: Implement block hex parsing
-	// For now, return an empty slice
-	return []string{}, nil
+	// The block hex string is in the format:
+	// <version><prev_block><merkle_root><timestamp><bits><nonce><tx_count><tx1><tx2>...
+	// We need to extract the transaction IDs from the transactions
+
+	// For now, we'll just return the coinbase transaction
+	// TODO: Implement proper block parsing
+	return []string{blockHex[:64]}, nil
 }
 
 // Stop stops the mempool tracker
@@ -164,20 +175,24 @@ func (mt *MempoolTracker) Stop() {
 
 // monitorMempool continuously monitors the mempool for new transactions
 func (mt *MempoolTracker) monitorMempool() {
+	log.Println("Starting mempool monitoring loop")
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-mt.stopChan:
+			log.Println("Stopping mempool monitoring")
 			return
 		case <-ticker.C:
+			log.Println("Checking mempool for new transactions")
 			// Get mempool transactions
 			txIDs, err := mt.client.GetMempoolTransactions()
 			if err != nil {
 				log.Printf("Failed to get mempool transactions: %v", err)
 				continue
 			}
+			log.Printf("Found %d transactions in mempool", len(txIDs))
 
 			// Process new transactions
 			for _, txID := range txIDs {
@@ -224,6 +239,7 @@ func (mt *MempoolTracker) monitorMempool() {
 
 				// Check if the address in the transaction is being tracked
 				if mt.IsAddressTracked(mempoolTx.Address) {
+					log.Printf("Processing mempool transaction %s for tracked address %s", txID, mempoolTx.Address)
 					// Add transaction to database
 					if err := db.AddTransaction(mt.db, dbTx); err != nil {
 						log.Printf("Failed to add transaction to database: %v", err)

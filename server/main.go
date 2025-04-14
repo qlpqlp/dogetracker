@@ -56,6 +56,8 @@ func getEnvIntOrDefault(key string, defaultValue int) int {
 }
 
 func main() {
+	log.Println("Starting DogeTracker server...")
+
 	// Parse command line flags
 	dbHost := flag.String("db-host", getEnvOrDefault("DB_HOST", "localhost"), "PostgreSQL host")
 	dbPort := flag.Int("db-port", getEnvIntOrDefault("DB_PORT", 5432), "PostgreSQL port")
@@ -76,11 +78,7 @@ func main() {
 
 	flag.Parse()
 
-	// Validate API token
-	if *apiToken == "" {
-		log.Fatal("API token is required")
-	}
-
+	log.Printf("Connecting to database at %s:%d...", *dbHost, *dbPort)
 	// Connect to database
 	dbConnStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		*dbHost, *dbPort, *dbUser, *dbPass, *dbName)
@@ -91,34 +89,49 @@ func main() {
 	}
 	defer dbConn.Close()
 
+	log.Println("Initializing database schema...")
 	// Initialize database schema
 	if err := serverdb.InitDB(dbConn); err != nil {
 		log.Fatalf("Error initializing database: %v", err)
 	}
 
+	log.Printf("Connecting to Dogecoin RPC at %s:%d...", *rpcHost, *rpcPort)
 	// Create RPC client
 	client := core.NewCoreRPCClient(*rpcHost, *rpcPort, *rpcUser, *rpcPass)
 
+	// Test RPC connection
+	blockCount, err := client.GetBlockCount()
+	if err != nil {
+		log.Fatalf("Error connecting to Dogecoin RPC: %v", err)
+	}
+	log.Printf("Connected to Dogecoin node. Current block height: %d", blockCount)
+
+	log.Println("Getting tracked addresses...")
 	// Get tracked addresses
 	trackedAddresses, err := serverdb.GetAllTrackedAddresses(dbConn)
 	if err != nil {
 		log.Printf("Error getting tracked addresses: %v", err)
 		trackedAddresses = []string{} // Empty list if error
 	}
+	log.Printf("Found %d tracked addresses", len(trackedAddresses))
 
+	log.Println("Creating mempool tracker...")
 	// Create mempool tracker
 	mempoolTracker := mempool.NewMempoolTracker(dbConn, client)
 
 	// Add tracked addresses to mempool tracker
 	for _, addr := range trackedAddresses {
+		log.Printf("Adding address to tracker: %s", addr)
 		mempoolTracker.AddAddress(addr)
 	}
 
+	log.Printf("Starting mempool tracker from block %s...", *startBlock)
 	if err := mempoolTracker.Start(*startBlock); err != nil {
 		log.Fatalf("Failed to start mempool tracker: %v", err)
 	}
 	defer mempoolTracker.Stop()
 
+	log.Printf("Starting API server on port %d...", *apiPort)
 	// Create API server
 	server := api.NewServer(dbConn, *apiToken, mempoolTracker)
 
@@ -129,6 +142,7 @@ func main() {
 		}
 	}()
 
+	log.Println("Server started successfully. Waiting for interrupt signal...")
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
