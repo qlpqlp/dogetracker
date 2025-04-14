@@ -73,7 +73,7 @@ func main() {
 	dbName := flag.String("db-name", getEnvOrDefault("DB_NAME", "dogetracker"), "PostgreSQL database name")
 
 	// API flags
-	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 8080), "API server port")
+	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 470), "API server port")
 	apiToken := flag.String("api-token", getEnvOrDefault("API_TOKEN", ""), "API bearer token for authentication")
 
 	// Block processing flags
@@ -152,13 +152,16 @@ func main() {
 		startBlockStr = strconv.FormatInt(config.startBlock, 10)
 	}
 
-	// Start mempool tracker
-	if err := tracker.Start(startBlockStr); err != nil {
-		log.Fatalf("Failed to start mempool tracker: %v", err)
-	}
+	// Start mempool tracker in a goroutine
+	go func() {
+		if err := tracker.Start(startBlockStr); err != nil {
+			log.Fatalf("Failed to start mempool tracker: %v", err)
+		}
+	}()
 
 	// Set up API server
 	api.SetDB(dbConn)
+	api.SetToken(config.apiToken) // Set the API token
 	http.HandleFunc("/api/track", api.TrackAddressHandler)
 	http.HandleFunc("/api/balance", func(w http.ResponseWriter, r *http.Request) {
 		// TODO: Implement balance handler
