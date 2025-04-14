@@ -76,8 +76,6 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 		return fmt.Errorf("failed to decode transaction: %v", err)
 	}
 
-	log.Printf("Processing transaction %s with %d inputs and %d outputs", txID, len(txDetails.Vin), len(txDetails.Vout))
-
 	// Track all addresses involved in the transaction
 	involvedAddresses := make(map[string]bool)
 
@@ -86,13 +84,11 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 		if vin.TxID != "" { // Skip coinbase
 			prevTx, err := t.client.GetRawTransaction(vin.TxID)
 			if err != nil {
-				log.Printf("Failed to get previous transaction %s: %v", vin.TxID, err)
 				continue
 			}
 
 			prevTxDetails, err := t.client.DecodeRawTransaction(prevTx)
 			if err != nil {
-				log.Printf("Failed to decode previous transaction %s: %v", vin.TxID, err)
 				continue
 			}
 
@@ -101,13 +97,11 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 				if len(prevOut.ScriptPubKey.Addresses) > 0 {
 					fromAddr := prevOut.ScriptPubKey.Addresses[0]
 					involvedAddresses[fromAddr] = true
-					log.Printf("Found from address: %s (tracked: %v)", fromAddr, t.IsAddressTracked(fromAddr))
 
 					if t.IsAddressTracked(fromAddr) {
 						// Get or create address
 						addr, err := db.GetOrCreateAddress(t.db, fromAddr)
 						if err != nil {
-							log.Printf("Failed to get or create address: %v", err)
 							continue
 						}
 
@@ -122,16 +116,15 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 							Confirmations: 1,
 							FromAddress:   fromAddr,
 							ToAddress:     "", // Will be set when processing outputs
+							Status:        "pending",
 						}
 						if err := db.AddTransaction(t.db, tx); err != nil {
-							log.Printf("Failed to create outgoing transaction: %v", err)
-						} else {
-							log.Printf("Created outgoing transaction for %s: %f DOGE", fromAddr, -prevOut.Value)
+							continue
 						}
 
 						// Remove the spent output from unspent_outputs
 						if err := db.RemoveUnspentOutput(t.db, addr.ID, vin.TxID, int(vin.Vout)); err != nil {
-							log.Printf("Failed to remove spent output: %v", err)
+							continue
 						}
 					}
 				}
@@ -144,13 +137,11 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 		if len(vout.ScriptPubKey.Addresses) > 0 {
 			toAddr := vout.ScriptPubKey.Addresses[0]
 			involvedAddresses[toAddr] = true
-			log.Printf("Found to address: %s (tracked: %v)", toAddr, t.IsAddressTracked(toAddr))
 
 			if t.IsAddressTracked(toAddr) {
 				// Get or create address
 				addr, err := db.GetOrCreateAddress(t.db, toAddr)
 				if err != nil {
-					log.Printf("Failed to get or create address: %v", err)
 					continue
 				}
 
@@ -174,11 +165,10 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 					Confirmations: 1,
 					FromAddress:   fromAddr,
 					ToAddress:     toAddr,
+					Status:        "pending",
 				}
 				if err := db.AddTransaction(t.db, tx); err != nil {
-					log.Printf("Failed to create incoming transaction: %v", err)
-				} else {
-					log.Printf("Created incoming transaction for %s: %f DOGE", toAddr, vout.Value)
+					continue
 				}
 
 				// Add unspent output
@@ -190,7 +180,7 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 					Script:    vout.ScriptPubKey.Hex,
 				}
 				if err := db.AddUnspentOutput(t.db, output); err != nil {
-					log.Printf("Failed to add unspent output: %v", err)
+					continue
 				}
 			}
 		}
@@ -282,13 +272,10 @@ func (t *MempoolTracker) Start(startBlock string) error {
 
 // monitorMempool monitors the mempool for new transactions
 func (t *MempoolTracker) monitorMempool() {
-	log.Printf("Starting mempool monitoring")
-
 	for {
 		// Get mempool transactions
 		txIDs, err := t.client.GetRawMempool()
 		if err != nil {
-			log.Printf("Failed to get mempool transactions: %v", err)
 			time.Sleep(10 * time.Second)
 			continue
 		}
@@ -303,14 +290,12 @@ func (t *MempoolTracker) monitorMempool() {
 			// Get transaction details
 			txHex, err := t.client.GetRawTransaction(txID)
 			if err != nil {
-				log.Printf("Failed to get transaction %s: %v", txID, err)
 				continue
 			}
 
 			// Decode transaction
 			tx, err := t.client.DecodeRawTransaction(txHex)
 			if err != nil {
-				log.Printf("Failed to decode transaction %s: %v", txID, err)
 				continue
 			}
 
@@ -323,13 +308,11 @@ func (t *MempoolTracker) monitorMempool() {
 				// Get the previous transaction output
 				prevTxHex, err := t.client.GetRawTransaction(input.TxID)
 				if err != nil {
-					log.Printf("Failed to get previous transaction %s: %v", input.TxID, err)
 					continue
 				}
 
 				prevTx, err := t.client.DecodeRawTransaction(prevTxHex)
 				if err != nil {
-					log.Printf("Failed to decode previous transaction %s: %v", input.TxID, err)
 					continue
 				}
 
@@ -345,7 +328,6 @@ func (t *MempoolTracker) monitorMempool() {
 					// Get or create address
 					addr, err := db.GetOrCreateAddress(t.db, address)
 					if err != nil {
-						log.Printf("Failed to get or create address: %v", err)
 						continue
 					}
 
@@ -360,11 +342,15 @@ func (t *MempoolTracker) monitorMempool() {
 						Confirmations: 0,
 						FromAddress:   address,
 						ToAddress:     "", // Will be set when processing outputs
+						Status:        "pending",
 					}
 					if err := db.AddTransaction(t.db, tx); err != nil {
-						log.Printf("Failed to create outgoing transaction: %v", err)
-					} else {
-						log.Printf("Created outgoing mempool transaction for %s: %f DOGE", address, -prevOutput.Value)
+						continue
+					}
+
+					// Remove the spent output from unspent_outputs
+					if err := db.RemoveUnspentOutput(t.db, addr.ID, input.TxID, int(input.Vout)); err != nil {
+						continue
 					}
 				}
 			}
@@ -381,7 +367,6 @@ func (t *MempoolTracker) monitorMempool() {
 					// Get or create address
 					addr, err := db.GetOrCreateAddress(t.db, address)
 					if err != nil {
-						log.Printf("Failed to get or create address: %v", err)
 						continue
 					}
 
@@ -418,11 +403,10 @@ func (t *MempoolTracker) monitorMempool() {
 						Confirmations: 0,
 						FromAddress:   fromAddr,
 						ToAddress:     address,
+						Status:        "pending",
 					}
 					if err := db.AddTransaction(t.db, tx); err != nil {
-						log.Printf("Failed to create incoming transaction: %v", err)
-					} else {
-						log.Printf("Created incoming mempool transaction for %s: %f DOGE", address, output.Value)
+						continue
 					}
 
 					// Add unspent output
@@ -434,7 +418,7 @@ func (t *MempoolTracker) monitorMempool() {
 						Script:    output.ScriptPubKey.Hex,
 					}
 					if err := db.AddUnspentOutput(t.db, output); err != nil {
-						log.Printf("Failed to add unspent output: %v", err)
+						continue
 					}
 				}
 			}

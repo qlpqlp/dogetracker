@@ -16,18 +16,19 @@ type TrackedAddress struct {
 	CreatedAt             time.Time `json:"created_at"`
 }
 
-// Transaction represents a Dogecoin transaction involving a tracked address
+// Transaction represents a transaction in the database
 type Transaction struct {
 	ID            int64     `json:"id"`
 	AddressID     int64     `json:"address_id"`
 	TxID          string    `json:"tx_id"`
+	Amount        float64   `json:"amount"`
 	BlockHash     string    `json:"block_hash"`
 	BlockHeight   int64     `json:"block_height"`
-	Amount        float64   `json:"amount"`
 	IsIncoming    bool      `json:"is_incoming"`
 	Confirmations int       `json:"confirmations"`
 	FromAddress   string    `json:"from_address"`
 	ToAddress     string    `json:"to_address"`
+	Status        string    `json:"status"` // 'pending' or 'confirmed'
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -48,11 +49,11 @@ func InitDB(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS tracked_addresses (
 			id SERIAL PRIMARY KEY,
-			address VARCHAR(34) UNIQUE NOT NULL,
-			balance DECIMAL(20,8) DEFAULT 0,
-			last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			address TEXT UNIQUE NOT NULL,
+			balance DOUBLE PRECISION DEFAULT 0,
+			last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			required_confirmations INTEGER DEFAULT 6,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
@@ -64,15 +65,16 @@ func InitDB(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS transactions (
 			id SERIAL PRIMARY KEY,
 			address_id INTEGER REFERENCES tracked_addresses(id),
-			tx_id VARCHAR(64) NOT NULL,
-			amount DECIMAL(20,8) NOT NULL,
-			block_hash VARCHAR(64),
+			tx_id TEXT NOT NULL,
+			amount DOUBLE PRECISION NOT NULL,
+			block_hash TEXT,
 			block_height BIGINT,
 			is_incoming BOOLEAN NOT NULL,
 			confirmations INTEGER DEFAULT 0,
-			from_address VARCHAR(34),
-			to_address VARCHAR(34),
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			from_address TEXT,
+			to_address TEXT,
+			status TEXT DEFAULT 'pending',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(tx_id, address_id)
 		)
 	`)
@@ -85,11 +87,11 @@ func InitDB(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS unspent_outputs (
 			id SERIAL PRIMARY KEY,
 			address_id INTEGER REFERENCES tracked_addresses(id),
-			tx_id VARCHAR(64) NOT NULL,
+			tx_id TEXT NOT NULL,
 			vout INTEGER NOT NULL,
-			amount DECIMAL(20,8) NOT NULL,
+			amount DOUBLE PRECISION NOT NULL,
 			script TEXT NOT NULL,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(tx_id, vout)
 		)
 	`)
@@ -102,8 +104,8 @@ func InitDB(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS last_processed_block (
 			id INTEGER PRIMARY KEY DEFAULT 1,
 			block_height BIGINT NOT NULL,
-			block_hash VARCHAR(64) NOT NULL,
-			processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			block_hash TEXT NOT NULL,
+			processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			CONSTRAINT single_row CHECK (id = 1)
 		)
 	`)
