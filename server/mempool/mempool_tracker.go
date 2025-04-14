@@ -116,14 +116,19 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 						if err := db.AddTransaction(t.db, tx); err != nil {
 							log.Printf("Failed to create outgoing transaction: %v", err)
 						}
+
+						// Remove the spent output from unspent_outputs
+						if err := db.RemoveUnspentOutput(t.db, addr.ID, vin.TxID, int(vin.Vout)); err != nil {
+							log.Printf("Failed to remove spent output: %v", err)
+						}
 					}
 				}
 			}
 		}
 	}
 
-	// Process outputs to get to_address
-	for _, vout := range txDetails.Vout {
+	// Process outputs to get to_address and add unspent outputs
+	for i, vout := range txDetails.Vout {
 		if len(vout.ScriptPubKey.Addresses) > 0 {
 			toAddr := vout.ScriptPubKey.Addresses[0]
 			if t.IsAddressTracked(toAddr) {
@@ -148,6 +153,18 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 				}
 				if err := db.AddTransaction(t.db, tx); err != nil {
 					log.Printf("Failed to create incoming transaction: %v", err)
+				}
+
+				// Add unspent output
+				output := &db.UnspentOutput{
+					AddressID: addr.ID,
+					TxID:      txID,
+					Vout:      i,
+					Amount:    vout.Value,
+					Script:    vout.ScriptPubKey.Hex,
+				}
+				if err := db.AddUnspentOutput(t.db, output); err != nil {
+					log.Printf("Failed to add unspent output: %v", err)
 				}
 			}
 		}
