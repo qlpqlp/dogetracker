@@ -417,11 +417,13 @@ func parseBlockTransactions(blockHex string) ([]string, error) {
 
 		// Calculate transaction hash from the entire transaction data
 		txEnd := len(blockBytes)
-		txData := blockBytes[txStart:txEnd]
-		hash := sha256.Sum256(txData)
-		hash = sha256.Sum256(hash[:])
-		txID := hex.EncodeToString(hash[:])
-		txIDs = append(txIDs, txID)
+		if txStart < txEnd {
+			txData := blockBytes[txStart:txEnd]
+			hash := sha256.Sum256(txData)
+			hash = sha256.Sum256(hash[:])
+			txID := hex.EncodeToString(hash[:])
+			txIDs = append(txIDs, txID)
+		}
 	}
 
 	return txIDs, nil
