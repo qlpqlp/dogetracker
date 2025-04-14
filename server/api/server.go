@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/dogeorg/dogetracker/pkg/mempool"
 	"github.com/dogeorg/dogetracker/server/db"
+	"github.com/dogeorg/dogetracker/server/mempool"
 )
 
 type Server struct {
@@ -85,7 +85,7 @@ func (s *Server) handleTrackAddress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get or create address and return details
-	addr, transactions, unspentOutputs, err := db.GetOrCreateAddressWithDetails(s.db, req.Address, req.RequiredConfirmations)
+	addr, transactions, unspentOutputs, err := db.GetAddressDetails(s.db, req.Address)
 	if err != nil {
 		http.Error(w, "Error processing request", http.StatusInternalServerError)
 		return
