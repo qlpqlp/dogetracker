@@ -108,6 +108,12 @@ func main() {
 
 	// Create mempool tracker
 	mempoolTracker := mempool.NewMempoolTracker(dbConn, client)
+
+	// Add tracked addresses to mempool tracker
+	for _, addr := range trackedAddresses {
+		mempoolTracker.AddAddress(addr)
+	}
+
 	if err := mempoolTracker.Start(*startBlock); err != nil {
 		log.Fatalf("Failed to start mempool tracker: %v", err)
 	}
