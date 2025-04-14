@@ -24,7 +24,8 @@ type Transaction struct {
 	Amount        float64   `json:"amount"`
 	IsIncoming    bool      `json:"is_incoming"`
 	Confirmations int       `json:"confirmations"`
-	Status        string    `json:"status"` // "pending" or "confirmed"
+	FromAddress   string    `json:"from_address"`
+	ToAddress     string    `json:"to_address"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -66,7 +67,8 @@ func InitDB(db *sql.DB) error {
 			amount DECIMAL(20,8) NOT NULL,
 			is_incoming BOOLEAN NOT NULL,
 			confirmations INTEGER NOT NULL DEFAULT 0,
-			status VARCHAR(10) NOT NULL DEFAULT 'pending',
+			from_address VARCHAR(34),
+			to_address VARCHAR(34),
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(address_id, tx_id)
 		)
@@ -96,32 +98,10 @@ func InitDB(db *sql.DB) error {
 	_, err = db.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_transactions_address_id ON transactions(address_id);
 		CREATE INDEX IF NOT EXISTS idx_transactions_tx_id ON transactions(tx_id);
+		CREATE INDEX IF NOT EXISTS idx_transactions_from_address ON transactions(from_address);
+		CREATE INDEX IF NOT EXISTS idx_transactions_to_address ON transactions(to_address);
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_address_id ON unspent_outputs(address_id);
 		CREATE INDEX IF NOT EXISTS idx_unspent_outputs_tx_id ON unspent_outputs(tx_id);
-	`)
-
-	if err != nil {
-		return err
-	}
-
-	// Create last_processed_block table
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS last_processed_block (
-			id INTEGER PRIMARY KEY DEFAULT 1,
-			block_hash VARCHAR(64) NOT NULL,
-			block_height BIGINT NOT NULL,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Insert default row if not exists
-	_, err = db.Exec(`
-		INSERT INTO last_processed_block (id, block_hash, block_height)
-		VALUES (1, '0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f', 0)
-		ON CONFLICT (id) DO NOTHING
 	`)
 
 	return err

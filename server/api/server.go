@@ -3,25 +3,21 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/dogeorg/dogetracker/server/db"
-	"github.com/dogeorg/dogetracker/server/mempool"
 )
 
 type Server struct {
-	db             *sql.DB
-	apiToken       string
-	mempoolTracker *mempool.MempoolTracker
+	db       *sql.DB
+	apiToken string
 }
 
-func NewServer(db *sql.DB, apiToken string, mempoolTracker *mempool.MempoolTracker) *Server {
+func NewServer(db *sql.DB, apiToken string) *Server {
 	return &Server{
-		db:             db,
-		apiToken:       apiToken,
-		mempoolTracker: mempoolTracker,
+		db:       db,
+		apiToken: apiToken,
 	}
 }
 
@@ -35,7 +31,7 @@ func (s *Server) Start(port int) error {
 	http.HandleFunc("/api/track", s.authMiddleware(s.handleTrackAddress))
 	http.HandleFunc("/api/address/", s.authMiddleware(s.handleGetAddress))
 
-	return http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
+	return http.ListenAndServe(":"+string(port), nil)
 }
 
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
@@ -57,8 +53,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 type TrackRequest struct {
-	Address               string `json:"address"`
-	RequiredConfirmations int    `json:"required_confirmations"`
+	Address string `json:"address"`
 }
 
 type AddressResponse struct {
@@ -79,21 +74,11 @@ func (s *Server) handleTrackAddress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required confirmations
-	if req.RequiredConfirmations < 1 {
-		req.RequiredConfirmations = 1 // Default to 1 if not specified or invalid
-	}
-
 	// Get or create address and return details
 	addr, transactions, unspentOutputs, err := db.GetAddressDetails(s.db, req.Address)
 	if err != nil {
 		http.Error(w, "Error processing request", http.StatusInternalServerError)
 		return
-	}
-
-	// Update mempool tracker with the new address
-	if s.mempoolTracker != nil {
-		s.mempoolTracker.AddAddress(req.Address)
 	}
 
 	response := AddressResponse{

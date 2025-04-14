@@ -1,12 +1,12 @@
-default: build/dogetracker
+default: build/dogewalker
 
 .PHONY: clean, test
 clean:
 	rm -rf ./build
 
-build/dogetracker: clean
+build/dogewalker: clean
 	mkdir -p build
-	go build -o build/dogetracker ./server/main.go
+	go build -o build/walker ./server/main.go
 
 test:
 	go test -v ./test/follower

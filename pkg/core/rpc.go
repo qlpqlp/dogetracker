@@ -54,30 +54,6 @@ func (c *CoreRPCClient) GetBlockCount() (blockCount int64, err error) {
 	return
 }
 
-// GetMempoolTransactions returns all transaction IDs in the mempool
-func (c *CoreRPCClient) GetMempoolTransactions() ([]string, error) {
-	var txids []string
-	err := c.Request("getrawmempool", []any{false}, &txids)
-	return txids, err
-}
-
-// GetMempoolTransaction returns detailed information about a specific mempool transaction
-func (c *CoreRPCClient) GetMempoolTransaction(txid string) (map[string]interface{}, error) {
-	var result map[string]interface{}
-	err := c.Request("getmempoolentry", []any{txid}, &result)
-	return result, err
-}
-
-// GetRawTransaction returns detailed information about a transaction
-func (c *CoreRPCClient) GetRawTransaction(txid string) (map[string]interface{}, error) {
-	var result map[string]interface{}
-	err := c.Request("getrawtransaction", []any{txid, true}, &result)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get raw transaction %s: %v", txid, err)
-	}
-	return result, nil
-}
-
 func (c *CoreRPCClient) Request(method string, params []any, result any) error {
 	id := c.id.Add(1) // each request should use a unique ID
 	c.lock.Lock()
@@ -142,4 +118,36 @@ type rpcResponse struct {
 	Id     uint64           `json:"id"`
 	Result *json.RawMessage `json:"result"`
 	Error  any              `json:"error"`
+}
+
+// GetRawTransaction retrieves a raw transaction by its ID
+func (c *CoreRPCClient) GetRawTransaction(txID string) (string, error) {
+	params := []interface{}{txID, 0} // 0 means return hex string
+	var result string
+	err := c.Request("getrawtransaction", params, &result)
+	if err != nil {
+		return "", fmt.Errorf("failed to get raw transaction: %v", err)
+	}
+	return result, nil
+}
+
+// DecodeRawTransaction decodes a raw transaction hex string
+func (c *CoreRPCClient) DecodeRawTransaction(hex string) (spec.Transaction, error) {
+	params := []interface{}{hex}
+	var result spec.Transaction
+	err := c.Request("decoderawtransaction", params, &result)
+	if err != nil {
+		return spec.Transaction{}, fmt.Errorf("failed to decode raw transaction: %v", err)
+	}
+	return result, nil
+}
+
+// GetRawMempool returns all transaction IDs in the mempool
+func (c *CoreRPCClient) GetRawMempool() ([]string, error) {
+	var result []string
+	err := c.Request("getrawmempool", []any{}, &result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get raw mempool: %v", err)
+	}
+	return result, nil
 }

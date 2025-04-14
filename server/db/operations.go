@@ -4,15 +4,8 @@ import (
 	"database/sql"
 )
 
-// DBOrTx is an interface that both *sql.DB and *sql.Tx satisfy
-type DBOrTx interface {
-	Query(query string, args ...interface{}) (*sql.Rows, error)
-	QueryRow(query string, args ...interface{}) *sql.Row
-	Exec(query string, args ...interface{}) (sql.Result, error)
-}
-
 // DB operations for tracked addresses
-func GetOrCreateAddress(db DBOrTx, address string) (*TrackedAddress, error) {
+func GetOrCreateAddress(db *sql.DB, address string) (*TrackedAddress, error) {
 	var addr TrackedAddress
 
 	// Try to get existing address
@@ -48,7 +41,8 @@ func GetAddressDetails(db *sql.DB, address string) (*TrackedAddress, []Transacti
 
 	// Get transactions
 	rows, err := db.Query(`
-		SELECT id, address_id, tx_id, block_hash, block_height, amount, is_incoming, confirmations, created_at
+		SELECT id, address_id, tx_id, block_hash, block_height, amount, 
+			is_incoming, confirmations, from_address, to_address, created_at
 		FROM transactions
 		WHERE address_id = $1
 		ORDER BY created_at DESC
@@ -62,7 +56,7 @@ func GetAddressDetails(db *sql.DB, address string) (*TrackedAddress, []Transacti
 	for rows.Next() {
 		var tx Transaction
 		err := rows.Scan(&tx.ID, &tx.AddressID, &tx.TxID, &tx.BlockHash, &tx.BlockHeight,
-			&tx.Amount, &tx.IsIncoming, &tx.Confirmations, &tx.CreatedAt)
+			&tx.Amount, &tx.IsIncoming, &tx.Confirmations, &tx.FromAddress, &tx.ToAddress, &tx.CreatedAt)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -95,7 +89,7 @@ func GetAddressDetails(db *sql.DB, address string) (*TrackedAddress, []Transacti
 }
 
 // Update address balance
-func UpdateAddressBalance(db DBOrTx, addressID int64, balance float64) error {
+func UpdateAddressBalance(db *sql.DB, addressID int64, balance float64) error {
 	_, err := db.Exec(`
 		UPDATE tracked_addresses 
 		SET balance = $1, updated_at = CURRENT_TIMESTAMP 
@@ -105,13 +99,18 @@ func UpdateAddressBalance(db DBOrTx, addressID int64, balance float64) error {
 }
 
 // Add transaction
-func AddTransaction(db DBOrTx, tx *Transaction) error {
+func AddTransaction(db *sql.DB, tx *Transaction) error {
 	_, err := db.Exec(`
-		INSERT INTO transactions (address_id, tx_id, block_hash, block_height, amount, is_incoming, confirmations)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO transactions (
+			address_id, tx_id, block_hash, block_height, amount, 
+			is_incoming, confirmations, from_address, to_address
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (address_id, tx_id) DO UPDATE 
-		SET block_hash = $3, block_height = $4, confirmations = $7
-	`, tx.AddressID, tx.TxID, tx.BlockHash, tx.BlockHeight, tx.Amount, tx.IsIncoming, tx.Confirmations)
+		SET block_hash = $3, block_height = $4, confirmations = $7,
+			from_address = $8, to_address = $9
+	`, tx.AddressID, tx.TxID, tx.BlockHash, tx.BlockHeight, tx.Amount,
+		tx.IsIncoming, tx.Confirmations, tx.FromAddress, tx.ToAddress)
 	return err
 }
 
@@ -133,117 +132,4 @@ func RemoveUnspentOutput(db *sql.DB, addressID int64, txID string, vout int) err
 		WHERE address_id = $1 AND tx_id = $2 AND vout = $3
 	`, addressID, txID, vout)
 	return err
-}
-
-// GetLastProcessedBlock returns the last processed block hash and height
-func GetLastProcessedBlock(db *sql.DB) (string, int64, error) {
-	var blockHash string
-	var blockHeight int64
-	err := db.QueryRow(`
-		SELECT block_hash, block_height 
-		FROM last_processed_block 
-		WHERE id = 1
-	`).Scan(&blockHash, &blockHeight)
-	if err != nil {
-		return "", 0, err
-	}
-	return blockHash, blockHeight, nil
-}
-
-// UpdateLastProcessedBlock updates the last processed block hash and height
-func UpdateLastProcessedBlock(db *sql.DB, blockHash string, blockHeight int64) error {
-	_, err := db.Exec(`
-		UPDATE last_processed_block 
-		SET block_hash = $1, block_height = $2, updated_at = CURRENT_TIMESTAMP 
-		WHERE id = 1
-	`, blockHash, blockHeight)
-	return err
-}
-
-// GetAllTrackedAddresses returns a list of all tracked addresses
-func GetAllTrackedAddresses(db *sql.DB) ([]string, error) {
-	rows, err := db.Query(`
-		SELECT address 
-		FROM tracked_addresses 
-		ORDER BY created_at DESC
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var addresses []string
-	for rows.Next() {
-		var addr string
-		if err := rows.Scan(&addr); err != nil {
-			return nil, err
-		}
-		addresses = append(addresses, addr)
-	}
-
-	return addresses, nil
-}
-
-// UpdateAddressBalanceWithTransaction updates the address balance and adds a transaction
-func UpdateAddressBalanceWithTransaction(db *sql.DB, address string, tx *Transaction) error {
-	// Start a transaction
-	txDB, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer txDB.Rollback() // Rollback if not committed
-
-	// Get or create the address
-	addr, err := GetOrCreateAddress(txDB, address)
-	if err != nil {
-		return err
-	}
-
-	// Add the transaction
-	tx.AddressID = addr.ID
-	if err := AddTransaction(txDB, tx); err != nil {
-		return err
-	}
-
-	// Calculate new balance
-	var newBalance float64
-	err = txDB.QueryRow(`
-		SELECT COALESCE(SUM(amount), 0)
-		FROM transactions
-		WHERE address_id = $1
-	`, addr.ID).Scan(&newBalance)
-	if err != nil {
-		return err
-	}
-
-	// Update address balance
-	if err := UpdateAddressBalance(txDB, addr.ID, newBalance); err != nil {
-		return err
-	}
-
-	// Commit the transaction
-	return txDB.Commit()
-}
-
-// RecalculateAddressBalance recalculates the balance for an address based on all transactions
-func RecalculateAddressBalance(db *sql.DB, address string) error {
-	// Get the address
-	addr, err := GetOrCreateAddress(db, address)
-	if err != nil {
-		return err
-	}
-
-	// Calculate new balance
-	var newBalance float64
-	err = db.QueryRow(`
-		SELECT COALESCE(SUM(amount), 0)
-		FROM transactions
-		WHERE address_id = $1
-	`, addr.ID).Scan(&newBalance)
-	if err != nil {
-		return err
-	}
-
-	// Update address balance
-	return UpdateAddressBalance(db, addr.ID, newBalance)
 }

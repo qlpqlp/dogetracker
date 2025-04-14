@@ -7,9 +7,8 @@ type Blockchain interface {
 	GetBlockHash(blockHeight int64) (hash string, err error)
 	GetBestBlockHash() (blockHash string, err error)
 	GetBlockCount() (blockCount int64, err error)
-	GetMempoolTransactions() ([]string, error)
-	GetMempoolTransaction(txid string) (map[string]interface{}, error)
-	GetRawTransaction(txid string) (map[string]interface{}, error)
+	GetRawTransaction(txID string) (hex string, err error)
+	DecodeRawTransaction(hex string) (txn Transaction, err error)
 }
 
 // BlockHeader from Dogecoin Core
@@ -30,4 +29,36 @@ type BlockHeader struct {
 	ChainWork         string  `json:"chainwork"`         // (string) Expected number of hashes required to produce the chain up to this block (hex)
 	PreviousBlockHash string  `json:"previousblockhash"` // (string) The hash of the previous block (hex)
 	NextBlockHash     string  `json:"nextblockhash"`     // (string) The hash of the next block (hex)
+}
+
+// Transaction represents a decoded raw transaction
+type Transaction struct {
+	TxID     string  `json:"txid"`
+	Version  int32   `json:"version"`
+	LockTime uint32  `json:"locktime"`
+	Vin      []TxIn  `json:"vin"`
+	Vout     []TxOut `json:"vout"`
+}
+
+// TxIn represents a transaction input
+type TxIn struct {
+	TxID      string `json:"txid"`
+	Vout      uint32 `json:"vout"`
+	ScriptSig Script `json:"scriptSig"`
+	Sequence  uint32 `json:"sequence"`
+}
+
+// TxOut represents a transaction output
+type TxOut struct {
+	Value        float64 `json:"value"`
+	N            uint32  `json:"n"`
+	ScriptPubKey Script  `json:"scriptPubKey"`
+}
+
+// Script represents a script in a transaction
+type Script struct {
+	Asm       string   `json:"asm"`
+	Hex       string   `json:"hex"`
+	Type      string   `json:"type"`
+	Addresses []string `json:"addresses"`
 }
