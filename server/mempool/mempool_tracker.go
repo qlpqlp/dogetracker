@@ -187,23 +187,23 @@ func (t *MempoolTracker) Start(startBlock string) error {
 		}
 
 		// Process each transaction in the block
-		for _, txID := range block.Tx {
+		for _, tx := range block.Tx {
 			// Get transaction details
-			txHex, err := t.client.GetRawTransaction(txID)
+			txHex, err := t.client.GetRawTransaction(tx.TxID)
 			if err != nil {
-				log.Printf("Failed to get transaction %s: %v", txID, err)
+				log.Printf("Failed to get transaction %s: %v", tx.TxID, err)
 				continue
 			}
 
 			// Decode transaction
-			tx, err := t.client.DecodeRawTransaction(txHex)
+			txDetails, err := t.client.DecodeRawTransaction(txHex)
 			if err != nil {
-				log.Printf("Failed to decode transaction %s: %v", txID, err)
+				log.Printf("Failed to decode transaction %s: %v", tx.TxID, err)
 				continue
 			}
 
 			// Process transaction inputs (outgoing transactions)
-			for _, input := range tx.Vin {
+			for _, input := range txDetails.Vin {
 				if input.TxID == "" { // Skip coinbase inputs
 					continue
 				}
@@ -253,9 +253,9 @@ func (t *MempoolTracker) Start(startBlock string) error {
 					VALUES ($1, $2, $3, $4, $5, $6)
 					ON CONFLICT (tx_id, address) DO UPDATE
 					SET confirmations = $5, status = $6, updated_at = CURRENT_TIMESTAMP
-				`, txID, address, amount, height, confirmations, status)
+				`, tx.TxID, address, amount, height, confirmations, status)
 				if err != nil {
-					log.Printf("Failed to insert transaction %s: %v", txID, err)
+					log.Printf("Failed to insert transaction %s: %v", tx.TxID, err)
 					continue
 				}
 
@@ -273,7 +273,7 @@ func (t *MempoolTracker) Start(startBlock string) error {
 			}
 
 			// Process transaction outputs (incoming transactions)
-			for _, output := range tx.Vout {
+			for _, output := range txDetails.Vout {
 				if len(output.ScriptPubKey.Addresses) == 0 {
 					continue
 				}
@@ -304,9 +304,9 @@ func (t *MempoolTracker) Start(startBlock string) error {
 					VALUES ($1, $2, $3, $4, $5, $6)
 					ON CONFLICT (tx_id, address) DO UPDATE
 					SET confirmations = $5, status = $6, updated_at = CURRENT_TIMESTAMP
-				`, txID, address, amount, height, confirmations, status)
+				`, tx.TxID, address, amount, height, confirmations, status)
 				if err != nil {
-					log.Printf("Failed to insert transaction %s: %v", txID, err)
+					log.Printf("Failed to insert transaction %s: %v", tx.TxID, err)
 					continue
 				}
 
