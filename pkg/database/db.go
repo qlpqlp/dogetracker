@@ -76,25 +76,44 @@ func (db *DB) InitSchema() error {
 		return fmt.Errorf("error creating unspent_transactions table: %v", err)
 	}
 
-	// Create processed_blocks table
+	// Create processed_blocks table (only stores the latest block)
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS processed_blocks (
 			id SERIAL PRIMARY KEY,
 			height BIGINT NOT NULL,
 			hash VARCHAR(64) NOT NULL,
-			processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(height, hash)
+			processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating processed_blocks table: %v", err)
 	}
 
+	// Ensure there's only one row in processed_blocks
+	_, err = db.Exec(`
+		CREATE OR REPLACE FUNCTION ensure_single_processed_block()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			DELETE FROM processed_blocks WHERE id != NEW.id;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+
+		DROP TRIGGER IF EXISTS ensure_single_processed_block_trigger ON processed_blocks;
+		CREATE TRIGGER ensure_single_processed_block_trigger
+		AFTER INSERT ON processed_blocks
+		FOR EACH ROW
+		EXECUTE FUNCTION ensure_single_processed_block();
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating trigger for processed_blocks: %v", err)
+	}
+
 	log.Println("Database schema initialized successfully")
 	return nil
 }
 
-// Add methods to handle processed blocks
+// GetLastProcessedBlock returns the latest processed block
 func (db *DB) GetLastProcessedBlock() (*ProcessedBlock, error) {
 	var block ProcessedBlock
 	err := db.QueryRow(`
@@ -113,11 +132,11 @@ func (db *DB) GetLastProcessedBlock() (*ProcessedBlock, error) {
 	return &block, nil
 }
 
+// SaveProcessedBlock saves the latest processed block
 func (db *DB) SaveProcessedBlock(height int64, hash string) error {
 	_, err := db.Exec(`
 		INSERT INTO processed_blocks (height, hash)
 		VALUES ($1, $2)
-		ON CONFLICT (height, hash) DO NOTHING
 	`, height, hash)
 	if err != nil {
 		return fmt.Errorf("error saving processed block: %v", err)

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dogeorg/dogetracker/pkg/api"
 	"github.com/dogeorg/dogetracker/pkg/chaser"
 	"github.com/dogeorg/dogetracker/pkg/core"
 	"github.com/dogeorg/dogetracker/pkg/database"
@@ -113,6 +114,15 @@ func main() {
 		log.Printf("Error initializing database schema: %v", err)
 		os.Exit(1)
 	}
+
+	// Start API server
+	apiServer := api.NewServer(db, config.apiPort, config.apiToken)
+	go func() {
+		if err := apiServer.Start(); err != nil {
+			log.Printf("Error starting API server: %v", err)
+			os.Exit(1)
+		}
+	}()
 
 	// Core Node blockchain access.
 	blockchain := core.NewCoreRPCClient(config.rpcHost, config.rpcPort, config.rpcUser, config.rpcPass)

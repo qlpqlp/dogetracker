@@ -16,6 +16,11 @@ type Server struct {
 	token string
 }
 
+type TrackRequest struct {
+	Address               string `json:"address"`
+	RequiredConfirmations int    `json:"required_confirmations"`
+}
+
 func NewServer(db *database.DB, port int, token string) *Server {
 	return &Server{
 		db:    db,
@@ -144,10 +149,55 @@ func (s *Server) handleAddress(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+func (s *Server) handleTrack(w http.ResponseWriter, r *http.Request) {
+	// Check authorization
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token != s.token {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse request body
+	var req TrackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate address
+	if req.Address == "" {
+		http.Error(w, "Address is required", http.StatusBadRequest)
+		return
+	}
+
+	// Save address to database
+	_, err := s.db.Exec(`
+		INSERT INTO addresses (address)
+		VALUES ($1)
+		ON CONFLICT (address) DO NOTHING
+	`, req.Address)
+	if err != nil {
+		log.Printf("Error saving address: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "Address is being tracked",
+	})
+}
+
 func (s *Server) Start() error {
 	http.HandleFunc("/api/address/", s.handleAddress)
-
-	addr := fmt.Sprintf(":%d", s.port)
-	log.Printf("Starting API server on %s", addr)
-	return http.ListenAndServe(addr, nil)
+	http.HandleFunc("/api/track", s.handleTrack)
+	log.Printf("Starting API server on port %d", s.port)
+	return http.ListenAndServe(fmt.Sprintf(":%d", s.port), nil)
 }
