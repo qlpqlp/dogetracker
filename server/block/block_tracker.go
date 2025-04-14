@@ -7,18 +7,18 @@ import (
 	"strconv"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/rpcclient"
-	"github.com/pvida/dogetracker/server/db"
+	"github.com/dogeorg/dogetracker/pkg/spec"
+	"github.com/dogeorg/dogetracker/server/db"
 )
 
 // BlockTracker tracks transactions in blocks
 type BlockTracker struct {
-	client *rpcclient.Client
+	client spec.Blockchain
 	db     *sql.DB
 }
 
 // NewBlockTracker creates a new BlockTracker
-func NewBlockTracker(client *rpcclient.Client, db *sql.DB) *BlockTracker {
+func NewBlockTracker(client spec.Blockchain, db *sql.DB) *BlockTracker {
 	return &BlockTracker{
 		client: client,
 		db:     db,

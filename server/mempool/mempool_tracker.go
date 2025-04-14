@@ -6,13 +6,13 @@ import (
 	"log"
 	"time"
 
-	"github.com/btcsuite/btcd/rpcclient"
-	"github.com/pvida/dogetracker/server/db"
+	"github.com/dogeorg/dogetracker/pkg/spec"
+	"github.com/dogeorg/dogetracker/server/db"
 )
 
 // MempoolTracker tracks transactions in the mempool
 type MempoolTracker struct {
-	client           *rpcclient.Client
+	client           spec.Blockchain
 	db               *sql.DB
 	trackedAddresses map[string]bool
 	processedTxs     map[string]bool
@@ -42,7 +42,7 @@ type Transaction struct {
 }
 
 // NewMempoolTracker creates a new MempoolTracker
-func NewMempoolTracker(client *rpcclient.Client, db *sql.DB) *MempoolTracker {
+func NewMempoolTracker(client spec.Blockchain, db *sql.DB) *MempoolTracker {
 	return &MempoolTracker{
 		client:           client,
 		db:               db,
