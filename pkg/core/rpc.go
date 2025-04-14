@@ -151,3 +151,19 @@ func (c *CoreRPCClient) GetRawMempool() ([]string, error) {
 	}
 	return result, nil
 }
+
+// GetBlockVerbose returns detailed information about a block
+func (c *CoreRPCClient) GetBlockVerbose(hash string) (block spec.Block, err error) {
+	var result struct {
+		Hash string   `json:"hash"`
+		Tx   []string `json:"tx"`
+	}
+	err = c.Request("getblock", []interface{}{hash, 2}, &result)
+	if err != nil {
+		return spec.Block{}, err
+	}
+	return spec.Block{
+		Hash: result.Hash,
+		Tx:   result.Tx,
+	}, nil
+}

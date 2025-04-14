@@ -18,6 +18,7 @@ import (
 	"github.com/dogeorg/dogetracker/pkg/migrate"
 	"github.com/dogeorg/dogetracker/pkg/walker"
 	"github.com/dogeorg/dogetracker/server/api"
+	"github.com/dogeorg/dogetracker/server/mempool"
 	_ "github.com/lib/pq"
 )
 
@@ -210,6 +211,13 @@ func main() {
 
 	// Process blocks and update database
 	go func() {
+		// Initialize mempool tracker
+		mempoolTracker := mempool.NewMempoolTracker(blockchain, db)
+		if err := mempoolTracker.Start(fmt.Sprintf("%d", startHeight)); err != nil {
+			log.Printf("Failed to start mempool tracker: %v", err)
+			return
+		}
+
 		for {
 			select {
 			case <-ctx.Done():

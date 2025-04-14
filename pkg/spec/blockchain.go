@@ -9,6 +9,7 @@ type Blockchain interface {
 	GetBlockCount() (blockCount int64, err error)
 	GetRawTransaction(txID string) (hex string, err error)
 	DecodeRawTransaction(hex string) (txn Transaction, err error)
+	GetRawMempool() (txIDs []string, err error)
 }
 
 // BlockHeader from Dogecoin Core
@@ -61,4 +62,10 @@ type Script struct {
 	Hex       string   `json:"hex"`
 	Type      string   `json:"type"`
 	Addresses []string `json:"addresses"`
+}
+
+// Block represents a block in the blockchain
+type Block struct {
+	Hash string   `json:"hash"`
+	Tx   []string `json:"tx"`
 }

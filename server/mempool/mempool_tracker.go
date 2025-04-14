@@ -7,12 +7,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/dogeorg/dogetracker/pkg/core"
+	"github.com/dogeorg/dogetracker/pkg/spec"
 	"github.com/dogeorg/dogetracker/server/db"
 )
 
 type MempoolTracker struct {
-	client           *core.CoreRPCClient
+	client           spec.Blockchain
 	db               *sql.DB
 	trackedAddresses map[string]bool
 }
@@ -39,7 +39,8 @@ type Transaction struct {
 	UpdatedAt     time.Time
 }
 
-func NewMempoolTracker(client *core.CoreRPCClient, db *sql.DB) *MempoolTracker {
+// NewMempoolTracker creates a new MempoolTracker
+func NewMempoolTracker(client spec.Blockchain, db *sql.DB) *MempoolTracker {
 	return &MempoolTracker{
 		client:           client,
 		db:               db,
