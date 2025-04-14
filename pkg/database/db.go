@@ -29,19 +29,8 @@ func NewDB(host string, port int, user, password, dbname string) (*DB, error) {
 }
 
 func (db *DB) InitSchema() error {
-	// Drop existing tables in reverse order of dependencies
-	_, err := db.Exec(`
-		DROP TABLE IF EXISTS processed_blocks CASCADE;
-		DROP TABLE IF EXISTS unspent_transactions CASCADE;
-		DROP TABLE IF EXISTS transactions CASCADE;
-		DROP TABLE IF EXISTS addresses CASCADE;
-	`)
-	if err != nil {
-		return fmt.Errorf("error dropping tables: %v", err)
-	}
-
 	// Create addresses table
-	_, err = db.Exec(`
+	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS addresses (
 			id SERIAL PRIMARY KEY,
 			address VARCHAR(34) UNIQUE NOT NULL,
