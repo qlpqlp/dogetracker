@@ -76,6 +76,51 @@ func (db *DB) InitSchema() error {
 		return fmt.Errorf("error creating unspent_transactions table: %v", err)
 	}
 
+	// Create processed_blocks table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS processed_blocks (
+			id SERIAL PRIMARY KEY,
+			height BIGINT NOT NULL,
+			hash VARCHAR(64) NOT NULL,
+			processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(height, hash)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating processed_blocks table: %v", err)
+	}
+
 	log.Println("Database schema initialized successfully")
+	return nil
+}
+
+// Add methods to handle processed blocks
+func (db *DB) GetLastProcessedBlock() (*ProcessedBlock, error) {
+	var block ProcessedBlock
+	err := db.QueryRow(`
+		SELECT id, height, hash, processed_at
+		FROM processed_blocks
+		ORDER BY height DESC
+		LIMIT 1
+	`).Scan(&block.ID, &block.Height, &block.Hash, &block.ProcessedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error getting last processed block: %v", err)
+	}
+	return &block, nil
+}
+
+func (db *DB) SaveProcessedBlock(height int64, hash string) error {
+	_, err := db.Exec(`
+		INSERT INTO processed_blocks (height, hash)
+		VALUES ($1, $2)
+		ON CONFLICT (height, hash) DO NOTHING
+	`, height, hash)
+	if err != nil {
+		return fmt.Errorf("error saving processed block: %v", err)
+	}
 	return nil
 }

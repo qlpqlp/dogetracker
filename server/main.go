@@ -10,6 +10,7 @@ import (
 
 	"github.com/dogeorg/dogetracker/pkg/chaser"
 	"github.com/dogeorg/dogetracker/pkg/core"
+	"github.com/dogeorg/dogetracker/pkg/database"
 )
 
 type Config struct {
@@ -71,8 +72,35 @@ func main() {
 
 	ctx, shutdown := context.WithCancel(context.Background())
 
+	// Initialize database
+	db, err := database.NewDB(config.dbHost, config.dbPort, config.dbUser, config.dbPass, config.dbName)
+	if err != nil {
+		log.Printf("Error connecting to database: %v", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	// Initialize database schema
+	if err := db.InitSchema(); err != nil {
+		log.Printf("Error initializing database schema: %v", err)
+		os.Exit(1)
+	}
+
 	// Core Node blockchain access.
 	blockchain := core.NewCoreRPCClient(config.rpcHost, config.rpcPort, config.rpcUser, config.rpcPass)
+
+	// Check for last processed block if start-block is not specified
+	if *startBlock < 0 {
+		lastBlock, err := db.GetLastProcessedBlock()
+		if err != nil {
+			log.Printf("Error getting last processed block: %v", err)
+			os.Exit(1)
+		}
+		if lastBlock != nil {
+			*startBlock = int(lastBlock.Height) + 1
+			log.Printf("Resuming from last processed block height: %d", *startBlock)
+		}
+	}
 
 	// Watch for new blocks.
 	zmqTip, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
@@ -90,6 +118,12 @@ func main() {
 			os.Exit(1)
 		}
 		log.Printf("Starting from block height %d (hash: %s)", *startBlock, hash)
+
+		// Save the starting block as processed
+		if err := db.SaveProcessedBlock(int64(*startBlock), hash); err != nil {
+			log.Printf("Error saving processed block: %v", err)
+			os.Exit(1)
+		}
 	}
 
 	// Hook ^C signal.

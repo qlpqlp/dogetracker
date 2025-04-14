@@ -32,3 +32,10 @@ type UnspentTransaction struct {
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
+
+type ProcessedBlock struct {
+	ID          int64     `json:"id"`
+	Height      int64     `json:"height"`
+	Hash        string    `json:"hash"`
+	ProcessedAt time.Time `json:"processed_at"`
+}
