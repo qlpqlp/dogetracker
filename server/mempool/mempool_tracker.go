@@ -319,123 +319,104 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 
 // parseBlockTransactions parses a block hex string to extract transaction IDs
 func parseBlockTransactions(blockHex string) ([]string, error) {
-	// Decode the block hex string
-	blockData, err := hex.DecodeString(blockHex)
+	// Decode block hex to bytes
+	blockBytes, err := hex.DecodeString(blockHex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode block hex: %v", err)
 	}
 
-	// Skip block header (80 bytes)
-	if len(blockData) < 80 {
+	if len(blockBytes) < 80 {
 		return nil, fmt.Errorf("block data too short")
 	}
-	offset := 80
 
-	// Read transaction count (varint)
-	txCount, bytesRead := binary.Uvarint(blockData[offset:])
-	if bytesRead <= 0 {
+	// Skip block header (80 bytes)
+	blockBytes = blockBytes[80:]
+
+	// Read transaction count
+	txCount, n := binary.Uvarint(blockBytes)
+	if n <= 0 {
 		return nil, fmt.Errorf("failed to read transaction count")
 	}
-	offset += bytesRead
+	blockBytes = blockBytes[n:]
 
-	// Extract transaction IDs
-	txIDs := make([]string, 0, txCount)
+	var txIDs []string
 	for i := uint64(0); i < txCount; i++ {
-		if offset >= len(blockData) {
-			return nil, fmt.Errorf("block data too short for transaction %d", i)
+		if len(blockBytes) < 4 {
+			return nil, fmt.Errorf("block data too short for transaction version")
 		}
 
-		// Calculate transaction hash
-		txStart := offset
-		txEnd := offset + 4 // version
+		// Skip version (4 bytes)
+		blockBytes = blockBytes[4:]
 
-		// Skip inputs
-		if txEnd >= len(blockData) {
-			return nil, fmt.Errorf("block data too short for input count")
-		}
-		inputCount, bytesRead := binary.Uvarint(blockData[txEnd:])
-		if bytesRead <= 0 {
+		// Read input count
+		inputCount, n := binary.Uvarint(blockBytes)
+		if n <= 0 {
 			return nil, fmt.Errorf("failed to read input count")
 		}
-		txEnd += bytesRead
+		blockBytes = blockBytes[n:]
 
+		// Skip inputs
 		for j := uint64(0); j < inputCount; j++ {
-			if txEnd+36 > len(blockData) {
-				return nil, fmt.Errorf("block data too short for input %d", j)
+			if len(blockBytes) < 36 {
+				return nil, fmt.Errorf("block data too short for input")
 			}
-			// Skip previous output (32 bytes hash + 4 bytes index)
-			txEnd += 36
+			// Skip previous output hash (32 bytes) and index (4 bytes)
+			blockBytes = blockBytes[36:]
 
-			if txEnd >= len(blockData) {
-				return nil, fmt.Errorf("block data too short for script length")
-			}
-			// Skip script length and script
-			scriptLen, bytesRead := binary.Uvarint(blockData[txEnd:])
-			if bytesRead <= 0 {
+			// Read script length
+			scriptLen, n := binary.Uvarint(blockBytes)
+			if n <= 0 {
 				return nil, fmt.Errorf("failed to read script length")
 			}
-			txEnd += bytesRead
-			if txEnd+int(scriptLen) > len(blockData) {
-				return nil, fmt.Errorf("block data too short for script")
-			}
-			txEnd += int(scriptLen)
+			blockBytes = blockBytes[n:]
 
-			if txEnd+4 > len(blockData) {
-				return nil, fmt.Errorf("block data too short for sequence")
+			if len(blockBytes) < int(scriptLen)+4 {
+				return nil, fmt.Errorf("block data too short for script and sequence")
 			}
-			// Skip sequence (4 bytes)
-			txEnd += 4
+			// Skip script and sequence (4 bytes)
+			blockBytes = blockBytes[scriptLen+4:]
 		}
 
-		// Skip outputs
-		if txEnd >= len(blockData) {
-			return nil, fmt.Errorf("block data too short for output count")
-		}
-		outputCount, bytesRead := binary.Uvarint(blockData[txEnd:])
-		if bytesRead <= 0 {
+		// Read output count
+		outputCount, n := binary.Uvarint(blockBytes)
+		if n <= 0 {
 			return nil, fmt.Errorf("failed to read output count")
 		}
-		txEnd += bytesRead
+		blockBytes = blockBytes[n:]
 
+		// Skip outputs
 		for j := uint64(0); j < outputCount; j++ {
-			if txEnd+8 > len(blockData) {
+			if len(blockBytes) < 8 {
 				return nil, fmt.Errorf("block data too short for output value")
 			}
 			// Skip value (8 bytes)
-			txEnd += 8
+			blockBytes = blockBytes[8:]
 
-			if txEnd >= len(blockData) {
-				return nil, fmt.Errorf("block data too short for script length")
-			}
-			// Skip script length and script
-			scriptLen, bytesRead := binary.Uvarint(blockData[txEnd:])
-			if bytesRead <= 0 {
+			// Read script length
+			scriptLen, n := binary.Uvarint(blockBytes)
+			if n <= 0 {
 				return nil, fmt.Errorf("failed to read script length")
 			}
-			txEnd += bytesRead
-			if txEnd+int(scriptLen) > len(blockData) {
+			blockBytes = blockBytes[n:]
+
+			if len(blockBytes) < int(scriptLen) {
 				return nil, fmt.Errorf("block data too short for script")
 			}
-			txEnd += int(scriptLen)
+			// Skip script
+			blockBytes = blockBytes[scriptLen:]
 		}
 
-		if txEnd+4 > len(blockData) {
+		if len(blockBytes) < 4 {
 			return nil, fmt.Errorf("block data too short for lock time")
 		}
 		// Skip lock time (4 bytes)
-		txEnd += 4
+		blockBytes = blockBytes[4:]
 
 		// Calculate transaction hash
-		if txEnd > len(blockData) {
-			return nil, fmt.Errorf("block data too short for transaction %d", i)
-		}
-		txData := blockData[txStart:txEnd]
-		firstHash := sha256.Sum256(txData)
-		secondHash := sha256.Sum256(firstHash[:])
-		txID := hex.EncodeToString(secondHash[:])
-
+		hash := sha256.Sum256(blockBytes)
+		hash = sha256.Sum256(hash[:])
+		txID := hex.EncodeToString(hash[:])
 		txIDs = append(txIDs, txID)
-		offset = txEnd
 	}
 
 	return txIDs, nil
