@@ -123,7 +123,6 @@ func (t *MempoolTracker) monitorMempool() {
 			}
 
 			// Track all addresses involved in the transaction
-			involvedAddresses := make(map[string]bool)
 			spentOutputs := make(map[string]map[int]bool) // Map of txID to vout indices that are spent
 
 			// Process inputs first to get from_addresses and track spent outputs
@@ -159,7 +158,7 @@ func (t *MempoolTracker) monitorMempool() {
 				// Check if address is tracked
 				if t.IsAddressTracked(address) {
 					// Get or create address
-					addr, err := db.GetOrCreateAddress(t.db, address)
+					addr, err := db.GetOrCreateAddress(t.db, address, 6)
 					if err != nil {
 						continue
 					}
@@ -198,7 +197,7 @@ func (t *MempoolTracker) monitorMempool() {
 				// Check if address is tracked
 				if t.IsAddressTracked(address) {
 					// Get or create address
-					addr, err := db.GetOrCreateAddress(t.db, address)
+					addr, err := db.GetOrCreateAddress(t.db, address, 6)
 					if err != nil {
 						continue
 					}

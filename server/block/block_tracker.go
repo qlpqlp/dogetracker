@@ -108,7 +108,6 @@ func (t *BlockTracker) processTransaction(txID string, blockHash *chainhash.Hash
 	confirmations := int(currentHeight - height + 1)
 
 	// Track all addresses involved in the transaction
-	involvedAddresses := make(map[string]bool)
 	spentOutputs := make(map[string]map[int]bool) // Map of txID to vout indices that are spent
 
 	// Process inputs first to get from_addresses and track spent outputs
@@ -134,10 +133,9 @@ func (t *BlockTracker) processTransaction(txID string, blockHash *chainhash.Hash
 				prevOut := prevTxDetails.Vout[vin.Vout]
 				if len(prevOut.ScriptPubKey.Addresses) > 0 {
 					fromAddr := prevOut.ScriptPubKey.Addresses[0]
-					involvedAddresses[fromAddr] = true
 
 					// Get or create address
-					addr, err := db.GetOrCreateAddress(t.db, fromAddr)
+					addr, err := db.GetOrCreateAddress(t.db, fromAddr, 6)
 					if err != nil {
 						continue
 					}
@@ -172,20 +170,32 @@ func (t *BlockTracker) processTransaction(txID string, blockHash *chainhash.Hash
 	for i, vout := range txDetails.Vout {
 		if len(vout.ScriptPubKey.Addresses) > 0 {
 			toAddr := vout.ScriptPubKey.Addresses[0]
-			involvedAddresses[toAddr] = true
 
 			// Get or create address
-			addr, err := db.GetOrCreateAddress(t.db, toAddr)
+			addr, err := db.GetOrCreateAddress(t.db, toAddr, 6)
 			if err != nil {
 				continue
 			}
 
 			// Find the from_address for this output
 			var fromAddr string
-			for addr := range involvedAddresses {
-				if addr != toAddr {
-					fromAddr = addr
-					break
+			for _, vin := range txDetails.Vin {
+				if vin.TxID != "" {
+					prevTx, err := t.client.GetRawTransaction(vin.TxID)
+					if err != nil {
+						continue
+					}
+					prevTxDetails, err := t.client.DecodeRawTransaction(prevTx)
+					if err != nil {
+						continue
+					}
+					if vin.Vout < uint32(len(prevTxDetails.Vout)) {
+						prevOut := prevTxDetails.Vout[vin.Vout]
+						if len(prevOut.ScriptPubKey.Addresses) > 0 {
+							fromAddr = prevOut.ScriptPubKey.Addresses[0]
+							break
+						}
+					}
 				}
 			}
 

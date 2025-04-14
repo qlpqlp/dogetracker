@@ -5,7 +5,7 @@ import (
 )
 
 // DB operations for tracked addresses
-func GetOrCreateAddress(db *sql.DB, address string) (*TrackedAddress, error) {
+func GetOrCreateAddress(db *sql.DB, address string, requiredConfirmations int) (*TrackedAddress, error) {
 	var addr TrackedAddress
 
 	// Try to get existing address
@@ -16,12 +16,12 @@ func GetOrCreateAddress(db *sql.DB, address string) (*TrackedAddress, error) {
 	`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.LastUpdated)
 
 	if err == sql.ErrNoRows {
-		// Create new address
+		// Create new address with provided required_confirmations
 		err = db.QueryRow(`
 			INSERT INTO tracked_addresses (address, balance, required_confirmations) 
-			VALUES ($1, 0, 6) 
+			VALUES ($1, 0, $2) 
 			RETURNING id, address, balance, required_confirmations, created_at, last_updated
-		`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.LastUpdated)
+		`, address, requiredConfirmations).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.LastUpdated)
 		if err != nil {
 			return nil, err
 		}
@@ -34,7 +34,7 @@ func GetOrCreateAddress(db *sql.DB, address string) (*TrackedAddress, error) {
 
 // Get address balance and details
 func GetAddressDetails(db *sql.DB, address string) (*TrackedAddress, []Transaction, []UnspentOutput, error) {
-	addr, err := GetOrCreateAddress(db, address)
+	addr, err := GetOrCreateAddress(db, address, 6)
 	if err != nil {
 		return nil, nil, nil, err
 	}

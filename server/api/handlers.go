@@ -81,7 +81,7 @@ func TrackAddressHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add address to database
-	addr, err := db.GetOrCreateAddress(dbConn, req.Address)
+	addr, err := db.GetOrCreateAddress(dbConn, req.Address, req.RequiredConfirmations)
 	if err != nil {
 		log.Printf("Failed to add address: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
