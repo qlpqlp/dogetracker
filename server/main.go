@@ -73,7 +73,7 @@ func main() {
 	dbPort := flag.Int("db-port", getEnvIntOrDefault("DB_PORT", 5432), "PostgreSQL port")
 	dbUser := flag.String("db-user", getEnvOrDefault("DB_USER", "postgres"), "PostgreSQL username")
 	dbPass := flag.String("db-pass", getEnvOrDefault("DB_PASS", "postgres"), "PostgreSQL password")
-	dbName := flag.String("db-name", getEnvOrDefault("DB_NAME", "dogewalker"), "PostgreSQL database name")
+	dbName := flag.String("db-name", getEnvOrDefault("DB_NAME", "dogetracker"), "PostgreSQL database name")
 
 	// API flags
 	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 8080), "API server port")
