@@ -74,7 +74,10 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 		return fmt.Errorf("failed to decode transaction: %v", err)
 	}
 
-	// Process transaction inputs and outputs
+	// Create a map to store from_addresses for each output
+	fromAddresses := make(map[int]string)
+
+	// Process transaction inputs first to get from_addresses
 	for _, vin := range txDetails.Vin {
 		if vin.TxID != "" { // Skip coinbase
 			prevTx, err := t.client.GetRawTransaction(vin.TxID)
@@ -93,6 +96,9 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 				prevOut := prevTxDetails.Vout[vin.Vout]
 				if len(prevOut.ScriptPubKey.Addresses) > 0 {
 					fromAddr := prevOut.ScriptPubKey.Addresses[0]
+					// Store the from_address for this input
+					fromAddresses[int(vin.Vout)] = fromAddr
+
 					if t.IsAddressTracked(fromAddr) {
 						// Get or create address
 						addr, err := db.GetOrCreateAddress(t.db, fromAddr)
@@ -139,6 +145,9 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 					continue
 				}
 
+				// Get the from_address for this output
+				fromAddr := fromAddresses[i]
+
 				// Create incoming transaction
 				tx := &db.Transaction{
 					AddressID:     addr.ID,
@@ -148,7 +157,7 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 					BlockHeight:   height,
 					IsIncoming:    true,
 					Confirmations: 1,
-					FromAddress:   "", // Will be set when processing inputs
+					FromAddress:   fromAddr,
 					ToAddress:     toAddr,
 				}
 				if err := db.AddTransaction(t.db, tx); err != nil {
