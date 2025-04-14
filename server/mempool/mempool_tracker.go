@@ -2,11 +2,15 @@ package mempool
 
 import (
 	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"strconv"
 	"sync"
 	"time"
+
+	"crypto/sha256"
 
 	"github.com/dogeorg/dogetracker/pkg/spec"
 	"github.com/dogeorg/dogetracker/server/db"
@@ -162,20 +166,87 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 
 // parseBlockTransactions parses a block hex string to extract transaction IDs
 func parseBlockTransactions(blockHex string) ([]string, error) {
-	// The block hex string is in the format:
-	// <version><prev_block><merkle_root><timestamp><bits><nonce><tx_count><tx1><tx2>...
-	// We need to extract the transaction IDs from the transactions
-
-	// For now, we'll just return the coinbase transaction
-	// The coinbase transaction is the first transaction in the block
-	// and its ID is the first 64 characters of the block hex
-	if len(blockHex) < 64 {
-		return nil, fmt.Errorf("block hex string too short")
+	// Decode the block hex string
+	blockData, err := hex.DecodeString(blockHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode block hex: %v", err)
 	}
 
-	// The first 64 characters represent the coinbase transaction ID
-	coinbaseTxID := blockHex[:64]
-	return []string{coinbaseTxID}, nil
+	// Skip block header (80 bytes)
+	if len(blockData) < 80 {
+		return nil, fmt.Errorf("block data too short")
+	}
+	offset := 80
+
+	// Read transaction count (varint)
+	txCount, bytesRead := binary.Uvarint(blockData[offset:])
+	if bytesRead <= 0 {
+		return nil, fmt.Errorf("failed to read transaction count")
+	}
+	offset += bytesRead
+
+	// Extract transaction IDs
+	txIDs := make([]string, 0, txCount)
+	for i := uint64(0); i < txCount; i++ {
+		// Calculate transaction hash
+		txStart := offset
+		txEnd := offset + 4 // version
+
+		// Skip inputs
+		inputCount, bytesRead := binary.Uvarint(blockData[txEnd:])
+		if bytesRead <= 0 {
+			return nil, fmt.Errorf("failed to read input count")
+		}
+		txEnd += bytesRead
+
+		for j := uint64(0); j < inputCount; j++ {
+			// Skip previous output (32 bytes hash + 4 bytes index)
+			txEnd += 36
+
+			// Skip script length and script
+			scriptLen, bytesRead := binary.Uvarint(blockData[txEnd:])
+			if bytesRead <= 0 {
+				return nil, fmt.Errorf("failed to read script length")
+			}
+			txEnd += bytesRead + int(scriptLen)
+
+			// Skip sequence (4 bytes)
+			txEnd += 4
+		}
+
+		// Skip outputs
+		outputCount, bytesRead := binary.Uvarint(blockData[txEnd:])
+		if bytesRead <= 0 {
+			return nil, fmt.Errorf("failed to read output count")
+		}
+		txEnd += bytesRead
+
+		for j := uint64(0); j < outputCount; j++ {
+			// Skip value (8 bytes)
+			txEnd += 8
+
+			// Skip script length and script
+			scriptLen, bytesRead := binary.Uvarint(blockData[txEnd:])
+			if bytesRead <= 0 {
+				return nil, fmt.Errorf("failed to read script length")
+			}
+			txEnd += bytesRead + int(scriptLen)
+		}
+
+		// Skip lock time (4 bytes)
+		txEnd += 4
+
+		// Calculate transaction hash
+		txData := blockData[txStart:txEnd]
+		firstHash := sha256.Sum256(txData)
+		secondHash := sha256.Sum256(firstHash[:])
+		txID := hex.EncodeToString(secondHash[:])
+
+		txIDs = append(txIDs, txID)
+		offset = txEnd
+	}
+
+	return txIDs, nil
 }
 
 // Stop stops the mempool tracker
