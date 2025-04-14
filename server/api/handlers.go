@@ -49,14 +49,15 @@ func TrackAddressHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Insert address into database
+	var id int64
 	var balance float64
 	err := dbConn.QueryRow(`
 		INSERT INTO tracked_addresses (address, balance, required_confirmations)
 		VALUES ($1, 0, $2)
 		ON CONFLICT (address) DO UPDATE
 		SET required_confirmations = $2
-		RETURNING balance
-	`, req.Address, req.RequiredConfirmations).Scan(&balance)
+		RETURNING id, balance
+	`, req.Address, req.RequiredConfirmations).Scan(&id, &balance)
 	if err != nil {
 		log.Printf("Failed to track address %s: %v", req.Address, err)
 		http.Error(w, "Failed to track address", http.StatusInternalServerError)
