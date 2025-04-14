@@ -7,10 +7,6 @@ type Blockchain interface {
 	GetBlockHash(blockHeight int64) (hash string, err error)
 	GetBestBlockHash() (blockHash string, err error)
 	GetBlockCount() (blockCount int64, err error)
-	GetRawTransaction(txID string) (hex string, err error)
-	DecodeRawTransaction(hex string) (txn Transaction, err error)
-	GetRawMempool() (txIDs []string, err error)
-	GetBlockVerbose(blockHash string) (*Block, error)
 }
 
 // BlockHeader from Dogecoin Core
@@ -31,54 +27,4 @@ type BlockHeader struct {
 	ChainWork         string  `json:"chainwork"`         // (string) Expected number of hashes required to produce the chain up to this block (hex)
 	PreviousBlockHash string  `json:"previousblockhash"` // (string) The hash of the previous block (hex)
 	NextBlockHash     string  `json:"nextblockhash"`     // (string) The hash of the next block (hex)
-}
-
-// Transaction represents a decoded raw transaction
-type Transaction struct {
-	TxID     string  `json:"txid"`
-	Version  int32   `json:"version"`
-	LockTime uint32  `json:"locktime"`
-	Vin      []TxIn  `json:"vin"`
-	Vout     []TxOut `json:"vout"`
-}
-
-// TxIn represents a transaction input
-type TxIn struct {
-	TxID      string `json:"txid"`
-	Vout      uint32 `json:"vout"`
-	ScriptSig Script `json:"scriptSig"`
-	Sequence  uint32 `json:"sequence"`
-}
-
-// TxOut represents a transaction output
-type TxOut struct {
-	Value        float64 `json:"value"`
-	N            uint32  `json:"n"`
-	ScriptPubKey Script  `json:"scriptPubKey"`
-}
-
-// Script represents a script in a transaction
-type Script struct {
-	Asm       string   `json:"asm"`
-	Hex       string   `json:"hex"`
-	Type      string   `json:"type"`
-	Addresses []string `json:"addresses"`
-}
-
-// Block represents a block with full transaction details
-type Block struct {
-	Hash          string        `json:"hash"`
-	Confirmations int64         `json:"confirmations"`
-	Height        int64         `json:"height"`
-	Version       uint32        `json:"version"`
-	MerkleRoot    string        `json:"merkleroot"`
-	Time          uint64        `json:"time"`
-	MedianTime    uint64        `json:"mediantime"`
-	Nonce         uint32        `json:"nonce"`
-	Bits          string        `json:"bits"`
-	Difficulty    float64       `json:"difficulty"`
-	ChainWork     string        `json:"chainwork"`
-	PreviousBlock string        `json:"previousblockhash"`
-	NextBlock     string        `json:"nextblockhash"`
-	Tx            []Transaction `json:"tx"`
 }
