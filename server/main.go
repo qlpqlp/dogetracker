@@ -20,6 +20,13 @@ type Config struct {
 	zmqHost   string
 	zmqPort   int
 	batchSize int
+	dbHost    string
+	dbPort    int
+	dbUser    string
+	dbPass    string
+	dbName    string
+	apiPort   int
+	apiToken  string
 }
 
 func main() {
@@ -32,16 +39,34 @@ func main() {
 	zmqPort := flag.Int("zmq-port", 28332, "ZMQ port number")
 	startBlock := flag.Int("start-block", -1, "Block height to start from (default: genesis block)")
 
+	// Database flags
+	dbHost := flag.String("db-host", "localhost", "Database host address")
+	dbPort := flag.Int("db-port", 5432, "Database port number")
+	dbUser := flag.String("db-user", "postgres", "Database username")
+	dbPass := flag.String("db-pass", "", "Database password")
+	dbName := flag.String("db-name", "dogetracker", "Database name")
+
+	// API flags
+	apiPort := flag.Int("api-port", 8080, "API server port")
+	apiToken := flag.String("api-token", "", "API authentication token")
+
 	// Parse command line flags
 	flag.Parse()
 
 	config := Config{
-		rpcHost: *rpcHost,
-		rpcPort: *rpcPort,
-		rpcUser: *rpcUser,
-		rpcPass: *rpcPass,
-		zmqHost: *zmqHost,
-		zmqPort: *zmqPort,
+		rpcHost:  *rpcHost,
+		rpcPort:  *rpcPort,
+		rpcUser:  *rpcUser,
+		rpcPass:  *rpcPass,
+		zmqHost:  *zmqHost,
+		zmqPort:  *zmqPort,
+		dbHost:   *dbHost,
+		dbPort:   *dbPort,
+		dbUser:   *dbUser,
+		dbPass:   *dbPass,
+		dbName:   *dbName,
+		apiPort:  *apiPort,
+		apiToken: *apiToken,
 	}
 
 	ctx, shutdown := context.WithCancel(context.Background())
