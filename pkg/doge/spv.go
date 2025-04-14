@@ -201,9 +201,53 @@ func (n *SPVNode) ConnectToPeer(peer string) error {
 		return fmt.Errorf("failed to send getheaders message: %v", err)
 	}
 
-	// Start message handling goroutine
-	n.logger.Printf("Starting message handling goroutine...")
-	go n.handleMessages()
+	// Start message handling loop
+	go func() {
+		for {
+			select {
+			case <-n.stopChan:
+				return
+			default:
+				msg, err := n.readMessage()
+				if err != nil {
+					if err == io.EOF {
+						n.logger.Printf("Connection closed by peer")
+						return
+					}
+					n.logger.Printf("Error reading message: %v", err)
+					continue
+				}
+
+				command := string(bytes.TrimRight(msg.Command[:], "\x00"))
+				n.logger.Printf("Received message of type: %s", command)
+
+				switch command {
+				case MsgHeaders:
+					if err := n.handleHeadersMessage(msg.Payload); err != nil {
+						n.logger.Printf("Error handling headers message: %v", err)
+					}
+				case MsgBlock:
+					if err := n.handleBlockMessage(msg.Payload); err != nil {
+						n.logger.Printf("Error handling block message: %v", err)
+					}
+				case MsgTx:
+					if err := n.handleTxMessage(msg.Payload); err != nil {
+						n.logger.Printf("Error handling transaction message: %v", err)
+					}
+				case MsgInv:
+					if err := n.handleInvMessage(msg.Payload); err != nil {
+						n.logger.Printf("Error handling inventory message: %v", err)
+					}
+				case MsgPing:
+					if err := n.handlePingMessage(msg.Payload); err != nil {
+						n.logger.Printf("Error handling ping message: %v", err)
+					}
+				default:
+					n.logger.Printf("Ignoring unknown message type: %s", command)
+				}
+			}
+		}
+	}()
 
 	return nil
 }
@@ -422,7 +466,7 @@ func (n *SPVNode) sendGetHeaders(genesisBlock string) error {
 	// Create block locator hashes
 	var locatorHashes [][]byte
 
-	// If we have no headers yet, start from the requested height
+	// If we have no headers yet, start from genesis block
 	if len(n.headers) == 0 {
 		// Use genesis block hash from chain params
 		genesisHash, err := hex.DecodeString(genesisBlock)
