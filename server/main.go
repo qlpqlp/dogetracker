@@ -51,6 +51,12 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 	log.Printf("Processing block: Height=%d, Hash=%s, Time=%d, Confirmations=%d",
 		header.Height, header.Hash, header.Time, header.Confirmations)
 
+	// Get raw block data
+	blockHex, err := blockchain.GetBlock(hash)
+	if err != nil {
+		return fmt.Errorf("error getting block data: %v", err)
+	}
+
 	// Get all tracked addresses
 	rows, err := db.Query("SELECT id, address FROM addresses")
 	if err != nil {
@@ -75,18 +81,68 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 
 	// Process transactions for each address
 	for _, addr := range addresses {
-		// Get address balance
+		// Get raw transactions for this address in this block
+		txs, err := blockchain.GetAddressTransactions(addr.Address, height)
+		if err != nil {
+			return fmt.Errorf("error getting transactions for address %s: %v", addr.Address, err)
+		}
+
+		// Process each transaction
+		for _, tx := range txs {
+			// Store transaction
+			_, err := db.Exec(`
+				INSERT INTO transactions (address_id, tx_hash, amount, block_height, confirmations, is_spent, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, NOW())
+				ON CONFLICT (address_id, tx_hash) DO UPDATE
+				SET confirmations = $5, is_spent = $6
+			`, addr.ID, tx.Hash, tx.Amount, height, header.Confirmations, tx.IsSpent)
+			if err != nil {
+				return fmt.Errorf("error storing transaction: %v", err)
+			}
+
+			// If transaction is unspent, store in unspent_transactions
+			if !tx.IsSpent {
+				_, err := db.Exec(`
+					INSERT INTO unspent_transactions (address_id, tx_hash, amount, block_height, confirmations, created_at)
+					VALUES ($1, $2, $3, $4, $5, NOW())
+					ON CONFLICT (address_id, tx_hash) DO UPDATE
+					SET confirmations = $5
+				`, addr.ID, tx.Hash, tx.Amount, height, header.Confirmations)
+				if err != nil {
+					return fmt.Errorf("error storing unspent transaction: %v", err)
+				}
+			} else {
+				// Remove from unspent if spent
+				_, err := db.Exec(`
+					DELETE FROM unspent_transactions
+					WHERE address_id = $1 AND tx_hash = $2
+				`, addr.ID, tx.Hash)
+				if err != nil {
+					return fmt.Errorf("error removing spent transaction: %v", err)
+				}
+			}
+		}
+
+		// Update address balance
 		var balance float64
-		err := db.QueryRow(`
+		err = db.QueryRow(`
 			SELECT COALESCE(SUM(amount), 0)
 			FROM unspent_transactions
 			WHERE address_id = $1
 		`, addr.ID).Scan(&balance)
 		if err != nil {
-			return fmt.Errorf("error getting balance for address %s: %v", addr.Address, err)
+			return fmt.Errorf("error calculating balance: %v", err)
 		}
 
-		log.Printf("Address %s balance: %.8f DOGE", addr.Address, balance)
+		// Update address balance in database
+		_, err = db.Exec(`
+			UPDATE addresses
+			SET balance = $1, updated_at = NOW()
+			WHERE id = $2
+		`, balance, addr.ID)
+		if err != nil {
+			return fmt.Errorf("error updating address balance: %v", err)
+		}
 	}
 
 	// Save the processed block

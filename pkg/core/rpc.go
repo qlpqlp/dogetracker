@@ -54,6 +54,25 @@ func (c *CoreRPCClient) GetBlockCount() (blockCount int64, err error) {
 	return
 }
 
+func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]spec.Transaction, error) {
+	// Get block hash
+	hash, err := c.GetBlockHash(height)
+	if err != nil {
+		return nil, fmt.Errorf("error getting block hash: %v", err)
+	}
+
+	// Get raw block data
+	blockHex, err := c.GetBlock(hash)
+	if err != nil {
+		return nil, fmt.Errorf("error getting block data: %v", err)
+	}
+
+	// Parse block data to find transactions involving the address
+	// For now, we'll return an empty slice since we need to implement the parsing
+	// TODO: Implement block parsing to find transactions
+	return []spec.Transaction{}, nil
+}
+
 func (c *CoreRPCClient) Request(method string, params []any, result any) error {
 	id := c.id.Add(1) // each request should use a unique ID
 	c.lock.Lock()

@@ -7,6 +7,14 @@ type Blockchain interface {
 	GetBlockHash(blockHeight int64) (hash string, err error)
 	GetBestBlockHash() (blockHash string, err error)
 	GetBlockCount() (blockCount int64, err error)
+	GetAddressTransactions(address string, height int64) ([]Transaction, error)
+}
+
+// Transaction represents a Dogecoin transaction
+type Transaction struct {
+	Hash    string  `json:"hash"`
+	Amount  float64 `json:"amount"`
+	IsSpent bool    `json:"is_spent"`
 }
 
 // BlockHeader from Dogecoin Core
