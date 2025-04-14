@@ -88,6 +88,19 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 			continue
 		}
 
+		// Get block header to check confirmations
+		blockHeader, err := mt.client.GetBlockHeader(blockHash)
+		if err != nil {
+			log.Printf("Failed to get block header for %s: %v", blockHash, err)
+			continue
+		}
+
+		// Skip orphaned blocks
+		if blockHeader.Confirmations == -1 {
+			log.Printf("Block %s is orphaned, skipping", blockHash)
+			continue
+		}
+
 		// Get block transactions
 		blockHex, err := mt.client.GetBlock(blockHash)
 		if err != nil {
@@ -150,8 +163,8 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 								BlockHeight:   mempoolTx.BlockHeight,
 								Amount:        mempoolTx.Amount,
 								IsIncoming:    mempoolTx.IsIncoming,
-								Confirmations: 0,
-								Status:        "pending",
+								Confirmations: int(blockHeader.Confirmations),
+								Status:        "confirmed",
 							}
 
 							// Check if the address in the transaction is being tracked
@@ -216,8 +229,8 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 										BlockHeight:   mempoolTx.BlockHeight,
 										Amount:        mempoolTx.Amount,
 										IsIncoming:    mempoolTx.IsIncoming,
-										Confirmations: 0,
-										Status:        "pending",
+										Confirmations: int(blockHeader.Confirmations),
+										Status:        "confirmed",
 									}
 
 									// Check if the address in the transaction is being tracked
