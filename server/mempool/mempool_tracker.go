@@ -126,60 +126,87 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 			}
 
 			// Process inputs and outputs
-			vins := tx["vin"].([]interface{})
-			vouts := tx["vout"].([]interface{})
+			vins, ok := tx["vin"].([]interface{})
+			if !ok {
+				log.Printf("Invalid vin format in transaction %s", txID)
+				continue
+			}
+
+			vouts, ok := tx["vout"].([]interface{})
+			if !ok {
+				log.Printf("Invalid vout format in transaction %s", txID)
+				continue
+			}
 
 			// Process outputs (incoming transactions)
 			for _, vout := range vouts {
-				voutMap := vout.(map[string]interface{})
-				if scriptPubKey, ok := voutMap["scriptPubKey"].(map[string]interface{}); ok {
-					if addresses, ok := scriptPubKey["addresses"].([]interface{}); ok {
-						for _, addr := range addresses {
-							addrStr := addr.(string)
-							amount := voutMap["value"].(float64)
+				voutMap, ok := vout.(map[string]interface{})
+				if !ok {
+					log.Printf("Invalid vout format in transaction %s", txID)
+					continue
+				}
 
-							// Create a new transaction
-							mempoolTx := &Transaction{
-								TxID:        txID,
-								BlockHash:   blockHash,
-								BlockHeight: height,
-								Amount:      amount,
-								IsIncoming:  true,
-								Address:     addrStr,
-							}
+				scriptPubKey, ok := voutMap["scriptPubKey"].(map[string]interface{})
+				if !ok {
+					continue
+				}
 
-							// Get or create address
-							addr, err := db.GetOrCreateAddress(mt.db, mempoolTx.Address)
-							if err != nil {
-								log.Printf("Failed to get or create address %s: %v", mempoolTx.Address, err)
-								continue
-							}
+				addresses, ok := scriptPubKey["addresses"].([]interface{})
+				if !ok {
+					continue
+				}
 
-							// Convert to database transaction
-							dbTx := &db.Transaction{
-								AddressID:     addr.ID,
-								TxID:          mempoolTx.TxID,
-								BlockHash:     mempoolTx.BlockHash,
-								BlockHeight:   mempoolTx.BlockHeight,
-								Amount:        mempoolTx.Amount,
-								IsIncoming:    mempoolTx.IsIncoming,
-								Confirmations: int(blockHeader.Confirmations),
-								Status:        "confirmed",
-							}
+				for _, addr := range addresses {
+					addrStr, ok := addr.(string)
+					if !ok {
+						continue
+					}
 
-							// Check if the address in the transaction is being tracked
-							if mt.IsAddressTracked(mempoolTx.Address) {
-								log.Printf("Processing transaction %s for tracked address %s", txID, mempoolTx.Address)
-								// Add transaction to database
-								if err := db.AddTransaction(mt.db, dbTx); err != nil {
-									log.Printf("Failed to add transaction to database: %v", err)
-								}
+					amount, ok := voutMap["value"].(float64)
+					if !ok {
+						continue
+					}
 
-								// Update address balance
-								if err := db.UpdateAddressBalanceWithTransaction(mt.db, mempoolTx.Address, dbTx); err != nil {
-									log.Printf("Failed to update address balance: %v", err)
-								}
-							}
+					// Create a new transaction
+					mempoolTx := &Transaction{
+						TxID:        txID,
+						BlockHash:   blockHash,
+						BlockHeight: height,
+						Amount:      amount,
+						IsIncoming:  true,
+						Address:     addrStr,
+					}
+
+					// Get or create address
+					addr, err := db.GetOrCreateAddress(mt.db, mempoolTx.Address)
+					if err != nil {
+						log.Printf("Failed to get or create address %s: %v", mempoolTx.Address, err)
+						continue
+					}
+
+					// Convert to database transaction
+					dbTx := &db.Transaction{
+						AddressID:     addr.ID,
+						TxID:          mempoolTx.TxID,
+						BlockHash:     mempoolTx.BlockHash,
+						BlockHeight:   mempoolTx.BlockHeight,
+						Amount:        mempoolTx.Amount,
+						IsIncoming:    mempoolTx.IsIncoming,
+						Confirmations: int(blockHeader.Confirmations),
+						Status:        "confirmed",
+					}
+
+					// Check if the address in the transaction is being tracked
+					if mt.IsAddressTracked(mempoolTx.Address) {
+						log.Printf("Processing transaction %s for tracked address %s", txID, mempoolTx.Address)
+						// Add transaction to database
+						if err := db.AddTransaction(mt.db, dbTx); err != nil {
+							log.Printf("Failed to add transaction to database: %v", err)
+						}
+
+						// Update address balance
+						if err := db.UpdateAddressBalanceWithTransaction(mt.db, mempoolTx.Address, dbTx); err != nil {
+							log.Printf("Failed to update address balance: %v", err)
 						}
 					}
 				}
@@ -187,67 +214,95 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 
 			// Process inputs (outgoing transactions)
 			for _, vin := range vins {
-				vinMap := vin.(map[string]interface{})
-				if txid, ok := vinMap["txid"].(string); ok {
-					// Get the previous transaction to check its output address
-					prevTx, err := mt.client.GetRawTransaction(txid)
-					if err != nil {
+				vinMap, ok := vin.(map[string]interface{})
+				if !ok {
+					log.Printf("Invalid vin format in transaction %s", txID)
+					continue
+				}
+
+				txid, ok := vinMap["txid"].(string)
+				if !ok {
+					continue
+				}
+
+				// Get the previous transaction to check its output address
+				prevTx, err := mt.client.GetRawTransaction(txid)
+				if err != nil {
+					continue
+				}
+
+				voutIndex, ok := vinMap["vout"].(float64)
+				if !ok {
+					continue
+				}
+
+				vouts, ok := prevTx["vout"].([]interface{})
+				if !ok || int(voutIndex) >= len(vouts) {
+					continue
+				}
+
+				vout := vouts[int(voutIndex)].(map[string]interface{})
+				scriptPubKey, ok := vout["scriptPubKey"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				addresses, ok := scriptPubKey["addresses"].([]interface{})
+				if !ok {
+					continue
+				}
+
+				for _, addr := range addresses {
+					addrStr, ok := addr.(string)
+					if !ok {
 						continue
 					}
 
-					voutIndex := int(vinMap["vout"].(float64))
-					if vouts, ok := prevTx["vout"].([]interface{}); ok && voutIndex < len(vouts) {
-						vout := vouts[voutIndex].(map[string]interface{})
-						if scriptPubKey, ok := vout["scriptPubKey"].(map[string]interface{}); ok {
-							if addresses, ok := scriptPubKey["addresses"].([]interface{}); ok {
-								for _, addr := range addresses {
-									addrStr := addr.(string)
-									amount := -vout["value"].(float64) // Negative for outgoing
+					amount, ok := vout["value"].(float64)
+					if !ok {
+						continue
+					}
 
-									// Create a new transaction
-									mempoolTx := &Transaction{
-										TxID:        txID,
-										BlockHash:   blockHash,
-										BlockHeight: height,
-										Amount:      amount,
-										IsIncoming:  false,
-										Address:     addrStr,
-									}
+					// Create a new transaction
+					mempoolTx := &Transaction{
+						TxID:        txID,
+						BlockHash:   blockHash,
+						BlockHeight: height,
+						Amount:      -amount, // Negative for outgoing
+						IsIncoming:  false,
+						Address:     addrStr,
+					}
 
-									// Get or create address
-									addr, err := db.GetOrCreateAddress(mt.db, mempoolTx.Address)
-									if err != nil {
-										log.Printf("Failed to get or create address %s: %v", mempoolTx.Address, err)
-										continue
-									}
+					// Get or create address
+					addr, err := db.GetOrCreateAddress(mt.db, mempoolTx.Address)
+					if err != nil {
+						log.Printf("Failed to get or create address %s: %v", mempoolTx.Address, err)
+						continue
+					}
 
-									// Convert to database transaction
-									dbTx := &db.Transaction{
-										AddressID:     addr.ID,
-										TxID:          mempoolTx.TxID,
-										BlockHash:     mempoolTx.BlockHash,
-										BlockHeight:   mempoolTx.BlockHeight,
-										Amount:        mempoolTx.Amount,
-										IsIncoming:    mempoolTx.IsIncoming,
-										Confirmations: int(blockHeader.Confirmations),
-										Status:        "confirmed",
-									}
+					// Convert to database transaction
+					dbTx := &db.Transaction{
+						AddressID:     addr.ID,
+						TxID:          mempoolTx.TxID,
+						BlockHash:     mempoolTx.BlockHash,
+						BlockHeight:   mempoolTx.BlockHeight,
+						Amount:        mempoolTx.Amount,
+						IsIncoming:    mempoolTx.IsIncoming,
+						Confirmations: int(blockHeader.Confirmations),
+						Status:        "confirmed",
+					}
 
-									// Check if the address in the transaction is being tracked
-									if mt.IsAddressTracked(mempoolTx.Address) {
-										log.Printf("Processing transaction %s for tracked address %s", txID, mempoolTx.Address)
-										// Add transaction to database
-										if err := db.AddTransaction(mt.db, dbTx); err != nil {
-											log.Printf("Failed to add transaction to database: %v", err)
-										}
+					// Check if the address in the transaction is being tracked
+					if mt.IsAddressTracked(mempoolTx.Address) {
+						log.Printf("Processing transaction %s for tracked address %s", txID, mempoolTx.Address)
+						// Add transaction to database
+						if err := db.AddTransaction(mt.db, dbTx); err != nil {
+							log.Printf("Failed to add transaction to database: %v", err)
+						}
 
-										// Update address balance
-										if err := db.UpdateAddressBalanceWithTransaction(mt.db, mempoolTx.Address, dbTx); err != nil {
-											log.Printf("Failed to update address balance: %v", err)
-										}
-									}
-								}
-							}
+						// Update address balance
+						if err := db.UpdateAddressBalanceWithTransaction(mt.db, mempoolTx.Address, dbTx); err != nil {
+							log.Printf("Failed to update address balance: %v", err)
 						}
 					}
 				}

@@ -72,7 +72,10 @@ func (c *CoreRPCClient) GetMempoolTransaction(txid string) (map[string]interface
 func (c *CoreRPCClient) GetRawTransaction(txid string) (map[string]interface{}, error) {
 	var result map[string]interface{}
 	err := c.Request("getrawtransaction", []any{txid, true}, &result)
-	return result, err
+	if err != nil {
+		return nil, fmt.Errorf("failed to get raw transaction %s: %v", txid, err)
+	}
+	return result, nil
 }
 
 func (c *CoreRPCClient) Request(method string, params []any, result any) error {
