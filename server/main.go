@@ -69,6 +69,7 @@ func main() {
 	dbName := flag.String("db-name", "dogetracker", "Database name")
 	apiPort := flag.Int("api-port", 420, "API port")
 	apiToken := flag.String("api-token", "", "API token")
+	startBlock := flag.Int64("start-block", 0, "Block height to start processing from")
 
 	flag.Parse()
 
@@ -78,6 +79,9 @@ func main() {
 	}
 	if *apiToken == "" {
 		log.Fatal("API token is required")
+	}
+	if *startBlock <= 0 {
+		log.Fatal("Start block must be greater than 0")
 	}
 
 	// Connect to database
@@ -99,6 +103,9 @@ func main() {
 
 	// Create mempool tracker
 	tracker := mempool.NewMempoolTracker(client, dbConn)
+
+	// Set the start block height
+	tracker.SetStartBlock(*startBlock)
 
 	// Start the mempool tracker
 	if err := tracker.Start(); err != nil {
