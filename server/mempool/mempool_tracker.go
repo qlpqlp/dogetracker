@@ -341,6 +341,9 @@ func parseBlockTransactions(blockHex string) ([]string, error) {
 
 	var txIDs []string
 	for i := uint64(0); i < txCount; i++ {
+		// Store the start of the transaction
+		txStart := len(blockBytes)
+
 		if len(blockBytes) < 4 {
 			return nil, fmt.Errorf("block data too short for transaction version")
 		}
@@ -412,8 +415,10 @@ func parseBlockTransactions(blockHex string) ([]string, error) {
 		// Skip lock time (4 bytes)
 		blockBytes = blockBytes[4:]
 
-		// Calculate transaction hash
-		hash := sha256.Sum256(blockBytes)
+		// Calculate transaction hash from the entire transaction data
+		txEnd := len(blockBytes)
+		txData := blockBytes[txStart:txEnd]
+		hash := sha256.Sum256(txData)
 		hash = sha256.Sum256(hash[:])
 		txID := hex.EncodeToString(hash[:])
 		txIDs = append(txIDs, txID)
