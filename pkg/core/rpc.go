@@ -152,18 +152,13 @@ func (c *CoreRPCClient) GetRawMempool() ([]string, error) {
 	return result, nil
 }
 
-// GetBlockVerbose returns detailed information about a block
-func (c *CoreRPCClient) GetBlockVerbose(hash string) (block spec.Block, err error) {
-	var result struct {
-		Hash string   `json:"hash"`
-		Tx   []string `json:"tx"`
-	}
-	err = c.Request("getblock", []interface{}{hash, 2}, &result)
+// GetBlockVerbose retrieves a block with full transaction details
+func (c *CoreRPCClient) GetBlockVerbose(blockHash string) (*spec.Block, error) {
+	params := []interface{}{blockHash, 2} // 2 means full transaction details
+	var block spec.Block
+	err := c.Request("getblock", params, &block)
 	if err != nil {
-		return spec.Block{}, err
+		return nil, fmt.Errorf("failed to get block: %v", err)
 	}
-	return spec.Block{
-		Hash: result.Hash,
-		Tx:   result.Tx,
-	}, nil
+	return &block, nil
 }

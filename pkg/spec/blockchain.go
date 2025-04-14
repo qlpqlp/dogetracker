@@ -10,6 +10,7 @@ type Blockchain interface {
 	GetRawTransaction(txID string) (hex string, err error)
 	DecodeRawTransaction(hex string) (txn Transaction, err error)
 	GetRawMempool() (txIDs []string, err error)
+	GetBlockVerbose(blockHash string) (*Block, error)
 }
 
 // BlockHeader from Dogecoin Core
@@ -64,8 +65,20 @@ type Script struct {
 	Addresses []string `json:"addresses"`
 }
 
-// Block represents a block in the blockchain
+// Block represents a block with full transaction details
 type Block struct {
-	Hash string   `json:"hash"`
-	Tx   []string `json:"tx"`
+	Hash          string        `json:"hash"`
+	Confirmations int64         `json:"confirmations"`
+	Height        int64         `json:"height"`
+	Version       uint32        `json:"version"`
+	MerkleRoot    string        `json:"merkleroot"`
+	Time          uint64        `json:"time"`
+	MedianTime    uint64        `json:"mediantime"`
+	Nonce         uint32        `json:"nonce"`
+	Bits          string        `json:"bits"`
+	Difficulty    float64       `json:"difficulty"`
+	ChainWork     string        `json:"chainwork"`
+	PreviousBlock string        `json:"previousblockhash"`
+	NextBlock     string        `json:"nextblockhash"`
+	Tx            []Transaction `json:"tx"`
 }

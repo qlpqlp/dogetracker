@@ -75,16 +75,16 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 
 	// Process transaction inputs and outputs
 	for _, vin := range txDetails.Vin {
-		if vin.Txid != "" { // Skip coinbase
-			prevTx, err := t.client.GetRawTransaction(vin.Txid)
+		if vin.TxID != "" { // Skip coinbase
+			prevTx, err := t.client.GetRawTransaction(vin.TxID)
 			if err != nil {
-				log.Printf("Failed to get previous transaction %s: %v", vin.Txid, err)
+				log.Printf("Failed to get previous transaction %s: %v", vin.TxID, err)
 				continue
 			}
 
 			prevTxDetails, err := t.client.DecodeRawTransaction(prevTx)
 			if err != nil {
-				log.Printf("Failed to decode previous transaction %s: %v", vin.Txid, err)
+				log.Printf("Failed to decode previous transaction %s: %v", vin.TxID, err)
 				continue
 			}
 
