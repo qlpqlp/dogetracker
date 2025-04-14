@@ -1,11 +1,13 @@
 package mempool
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"sync"
 	"time"
 
+	"github.com/dogeorg/dogetracker/pkg/spec"
 	"github.com/dogeorg/dogetracker/server/db"
 )
 
@@ -31,14 +33,60 @@ type MempoolTracker struct {
 	transactions map[string]*Transaction
 	addresses    map[string]bool
 	db           *sql.DB
+	client       spec.Blockchain
 }
 
 // NewMempoolTracker creates a new mempool tracker
-func NewMempoolTracker(db *sql.DB) *MempoolTracker {
+func NewMempoolTracker(db *sql.DB, client spec.Blockchain) *MempoolTracker {
 	return &MempoolTracker{
 		transactions: make(map[string]*Transaction),
 		addresses:    make(map[string]bool),
 		db:           db,
+		client:       client,
+	}
+}
+
+// Start begins tracking the mempool
+func (mt *MempoolTracker) Start(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Get mempool transactions
+			txIDs, err := mt.client.GetMempoolTransactions()
+			if err != nil {
+				log.Printf("Error getting mempool transactions: %v", err)
+				continue
+			}
+
+			// Process each transaction
+			for _, txID := range txIDs {
+				tx, err := mt.client.GetMempoolTransaction(txID)
+				if err != nil {
+					log.Printf("Error getting transaction %s: %v", txID, err)
+					continue
+				}
+
+				// Convert to our transaction type
+				mempoolTx := &Transaction{
+					TxID:        txID,
+					BlockHash:   "",
+					BlockHeight: 0,
+					Amount:      tx["amount"].(float64),
+					IsIncoming:  tx["is_incoming"].(bool),
+					Address:     tx["address"].(string),
+				}
+
+				// Add to mempool if address is being tracked
+				if mt.IsAddressTracked(mempoolTx.Address) {
+					mt.AddTransaction(mempoolTx)
+				}
+			}
+		}
 	}
 }
 

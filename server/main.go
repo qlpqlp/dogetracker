@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/dogeorg/dogetracker/pkg/core"
 	"github.com/dogeorg/dogetracker/server/api"
 	serverdb "github.com/dogeorg/dogetracker/server/db"
 	"github.com/dogeorg/dogetracker/server/mempool"
@@ -66,6 +68,12 @@ func main() {
 	apiPort := flag.Int("api-port", getEnvIntOrDefault("API_PORT", 8080), "API server port")
 	apiToken := flag.String("api-token", getEnvOrDefault("API_TOKEN", ""), "API authentication token")
 
+	// Dogecoin RPC flags
+	rpcHost := flag.String("rpc-host", getEnvOrDefault("DOGE_RPC_HOST", "127.0.0.1"), "Dogecoin RPC host")
+	rpcPort := flag.Int("rpc-port", getEnvIntOrDefault("DOGE_RPC_PORT", 22555), "Dogecoin RPC port")
+	rpcUser := flag.String("rpc-user", getEnvOrDefault("DOGE_RPC_USER", "dogecoin"), "Dogecoin RPC username")
+	rpcPass := flag.String("rpc-pass", getEnvOrDefault("DOGE_RPC_PASS", "dogecoin"), "Dogecoin RPC password")
+
 	flag.Parse()
 
 	// Validate API token
@@ -88,6 +96,9 @@ func main() {
 		log.Fatalf("Error initializing database: %v", err)
 	}
 
+	// Create RPC client
+	client := core.NewCoreRPCClient(*rpcHost, *rpcPort, *rpcUser, *rpcPass)
+
 	// Get tracked addresses
 	trackedAddresses, err := serverdb.GetAllTrackedAddresses(dbConn)
 	if err != nil {
@@ -96,7 +107,7 @@ func main() {
 	}
 
 	// Create mempool tracker
-	mempoolTracker := mempool.NewMempoolTracker(dbConn)
+	mempoolTracker := mempool.NewMempoolTracker(dbConn, client)
 	for _, addr := range trackedAddresses {
 		mempoolTracker.AddAddress(addr)
 	}
@@ -112,9 +123,8 @@ func main() {
 	}()
 
 	// Start mempool tracker
-	go func() {
-		// TODO: Implement mempool tracking logic
-	}()
+	ctx := context.Background()
+	go mempoolTracker.Start(ctx)
 
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
