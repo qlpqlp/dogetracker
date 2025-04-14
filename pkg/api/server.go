@@ -1,11 +1,13 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/dogeorg/dogetracker/pkg/database"
 )
@@ -195,9 +197,132 @@ func (s *Server) handleTrack(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type AddressInfo struct {
+	Address        string          `json:"address"`
+	Balance        float64         `json:"balance"`
+	Transactions   []Transaction   `json:"transactions"`
+	UnspentOutputs []UnspentOutput `json:"unspent_outputs"`
+}
+
+type Transaction struct {
+	TxHash        string    `json:"tx_hash"`
+	Amount        float64   `json:"amount"`
+	BlockHeight   int64     `json:"block_height"`
+	Confirmations int       `json:"confirmations"`
+	IsSpent       bool      `json:"is_spent"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type UnspentOutput struct {
+	TxHash        string    `json:"tx_hash"`
+	Amount        float64   `json:"amount"`
+	BlockHeight   int64     `json:"block_height"`
+	Confirmations int       `json:"confirmations"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (s *Server) handleGetAddress(w http.ResponseWriter, r *http.Request) {
+	// Check authorization
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token != s.token {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get address from URL path
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) != 4 {
+		http.Error(w, "Invalid address", http.StatusBadRequest)
+		return
+	}
+	address := parts[3]
+
+	// Get address info
+	var info AddressInfo
+	info.Address = address
+
+	// Get address ID
+	var addressID int64
+	err := s.db.QueryRow("SELECT id FROM addresses WHERE address = $1", address).Scan(&addressID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Address not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Get balance
+	err = s.db.QueryRow(`
+		SELECT COALESCE(SUM(amount), 0)
+		FROM unspent_transactions
+		WHERE address_id = $1
+	`, addressID).Scan(&info.Balance)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Get transactions
+	rows, err := s.db.Query(`
+		SELECT tx_hash, amount, block_height, confirmations, is_spent, created_at
+		FROM transactions
+		WHERE address_id = $1
+		ORDER BY created_at DESC
+	`, addressID)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tx Transaction
+		err := rows.Scan(&tx.TxHash, &tx.Amount, &tx.BlockHeight, &tx.Confirmations, &tx.IsSpent, &tx.CreatedAt)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		info.Transactions = append(info.Transactions, tx)
+	}
+
+	// Get unspent outputs
+	rows, err = s.db.Query(`
+		SELECT tx_hash, amount, block_height, confirmations, created_at
+		FROM unspent_transactions
+		WHERE address_id = $1
+		ORDER BY created_at DESC
+	`, addressID)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var utxo UnspentOutput
+		err := rows.Scan(&utxo.TxHash, &utxo.Amount, &utxo.BlockHeight, &utxo.Confirmations, &utxo.CreatedAt)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		info.UnspentOutputs = append(info.UnspentOutputs, utxo)
+	}
+
+	// Return response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
+}
+
 func (s *Server) Start() error {
-	http.HandleFunc("/api/address/", s.handleAddress)
 	http.HandleFunc("/api/track", s.handleTrack)
+	http.HandleFunc("/api/address/", s.handleGetAddress)
 	log.Printf("Starting API server on port %d", s.port)
 	return http.ListenAndServe(fmt.Sprintf(":%d", s.port), nil)
 }

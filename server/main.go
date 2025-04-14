@@ -51,6 +51,54 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 	log.Printf("Processing block: Height=%d, Hash=%s, Time=%d, Confirmations=%d",
 		header.Height, header.Hash, header.Time, header.Confirmations)
 
+	// Get raw block data
+	blockHex, err := blockchain.GetBlock(hash)
+	if err != nil {
+		return fmt.Errorf("error getting block data: %v", err)
+	}
+
+	// Parse block data (you'll need to implement this based on your blockchain library)
+	// For now, we'll just log that we're processing the block
+	log.Printf("Processing transactions in block %d", height)
+
+	// Get all tracked addresses
+	rows, err := db.Query("SELECT id, address FROM addresses")
+	if err != nil {
+		return fmt.Errorf("error getting tracked addresses: %v", err)
+	}
+	defer rows.Close()
+
+	var addresses []struct {
+		ID      int64
+		Address string
+	}
+	for rows.Next() {
+		var addr struct {
+			ID      int64
+			Address string
+		}
+		if err := rows.Scan(&addr.ID, &addr.Address); err != nil {
+			return fmt.Errorf("error scanning address: %v", err)
+		}
+		addresses = append(addresses, addr)
+	}
+
+	// Process transactions for each address
+	for _, addr := range addresses {
+		// Get address balance
+		var balance float64
+		err := db.QueryRow(`
+			SELECT COALESCE(SUM(amount), 0)
+			FROM unspent_transactions
+			WHERE address_id = $1
+		`, addr.ID).Scan(&balance)
+		if err != nil {
+			return fmt.Errorf("error getting balance for address %s: %v", addr.Address, err)
+		}
+
+		log.Printf("Address %s balance: %.8f DOGE", addr.Address, balance)
+	}
+
 	// Save the processed block
 	if err := db.SaveProcessedBlock(height, hash); err != nil {
 		return fmt.Errorf("error saving processed block: %v", err)
