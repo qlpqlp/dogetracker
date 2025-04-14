@@ -1,9 +1,10 @@
 package mempool
 
 import (
-	"context"
 	"database/sql"
+	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,49 +30,170 @@ type Block struct {
 
 // MempoolTracker tracks transactions in the mempool
 type MempoolTracker struct {
-	mu           sync.RWMutex
+	db     *sql.DB
+	client spec.Blockchain
+	mu     sync.RWMutex
+	// Map of address to balance
+	balances map[string]float64
+	// Map of transaction ID to transaction
 	transactions map[string]*Transaction
-	addresses    map[string]bool
-	db           *sql.DB
-	client       spec.Blockchain
+	// Map of address to list of transaction IDs
+	addressTransactions map[string][]string
+	// Map of address to whether it's being tracked
+	trackedAddresses map[string]bool
+	// Channel to stop the tracker
+	stopChan chan struct{}
 }
 
-// NewMempoolTracker creates a new mempool tracker
+// NewMempoolTracker creates a new MempoolTracker
 func NewMempoolTracker(db *sql.DB, client spec.Blockchain) *MempoolTracker {
 	return &MempoolTracker{
-		transactions: make(map[string]*Transaction),
-		addresses:    make(map[string]bool),
-		db:           db,
-		client:       client,
+		db:                  db,
+		client:              client,
+		balances:            make(map[string]float64),
+		transactions:        make(map[string]*Transaction),
+		addressTransactions: make(map[string][]string),
+		trackedAddresses:    make(map[string]bool),
+		stopChan:            make(chan struct{}),
 	}
 }
 
-// Start begins tracking the mempool
-func (mt *MempoolTracker) Start(ctx context.Context) {
+// Start starts tracking transactions from the specified block height
+func (mt *MempoolTracker) Start(startBlock string) error {
+	// Convert start block to int
+	startHeight, err := strconv.ParseInt(startBlock, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid start block height: %v", err)
+	}
+
+	// Get current block height
+	currentHeight, err := mt.client.GetBlockCount()
+	if err != nil {
+		return fmt.Errorf("failed to get current block height: %v", err)
+	}
+
+	// Process blocks from start height to current height
+	for height := startHeight; height <= currentHeight; height++ {
+		blockHash, err := mt.client.GetBlockHash(height)
+		if err != nil {
+			return fmt.Errorf("failed to get block hash for height %d: %v", height, err)
+		}
+
+		// Get block transactions
+		blockHex, err := mt.client.GetBlock(blockHash)
+		if err != nil {
+			return fmt.Errorf("failed to get block %s: %v", blockHash, err)
+		}
+
+		// Parse block hex to get transactions
+		txIDs, err := parseBlockTransactions(blockHex)
+		if err != nil {
+			return fmt.Errorf("failed to parse block transactions for %s: %v", blockHash, err)
+		}
+
+		// Process transactions in the block
+		for _, txID := range txIDs {
+			// Get transaction details
+			tx, err := mt.client.GetRawTransaction(txID)
+			if err != nil {
+				log.Printf("Failed to get transaction %s: %v", txID, err)
+				continue
+			}
+
+			// Create a new transaction
+			mempoolTx := &Transaction{
+				TxID:        txID,
+				BlockHash:   blockHash,
+				BlockHeight: height,
+				Amount:      tx["amount"].(float64),
+				IsIncoming:  tx["is_incoming"].(bool),
+				Address:     tx["address"].(string),
+			}
+
+			// Get or create address
+			addr, err := db.GetOrCreateAddress(mt.db, mempoolTx.Address)
+			if err != nil {
+				log.Printf("Failed to get or create address %s: %v", mempoolTx.Address, err)
+				continue
+			}
+
+			// Convert to database transaction
+			dbTx := &db.Transaction{
+				AddressID:     addr.ID,
+				TxID:          mempoolTx.TxID,
+				BlockHash:     mempoolTx.BlockHash,
+				BlockHeight:   mempoolTx.BlockHeight,
+				Amount:        mempoolTx.Amount,
+				IsIncoming:    mempoolTx.IsIncoming,
+				Confirmations: 0,
+				Status:        "pending",
+			}
+
+			// Check if the address in the transaction is being tracked
+			if mt.IsAddressTracked(mempoolTx.Address) {
+				// Add transaction to database
+				if err := db.AddTransaction(mt.db, dbTx); err != nil {
+					log.Printf("Failed to add transaction to database: %v", err)
+				}
+
+				// Update address balance
+				if err := db.UpdateAddressBalanceWithTransaction(mt.db, mempoolTx.Address, dbTx); err != nil {
+					log.Printf("Failed to update address balance: %v", err)
+				}
+			}
+		}
+	}
+
+	// Start monitoring mempool
+	go mt.monitorMempool()
+
+	return nil
+}
+
+// parseBlockTransactions parses a block hex string to extract transaction IDs
+func parseBlockTransactions(blockHex string) ([]string, error) {
+	// TODO: Implement block hex parsing
+	// For now, return an empty slice
+	return []string{}, nil
+}
+
+// Stop stops the mempool tracker
+func (mt *MempoolTracker) Stop() {
+	close(mt.stopChan)
+}
+
+// monitorMempool continuously monitors the mempool for new transactions
+func (mt *MempoolTracker) monitorMempool() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-mt.stopChan:
 			return
 		case <-ticker.C:
 			// Get mempool transactions
 			txIDs, err := mt.client.GetMempoolTransactions()
 			if err != nil {
-				log.Printf("Error getting mempool transactions: %v", err)
+				log.Printf("Failed to get mempool transactions: %v", err)
 				continue
 			}
 
-			// Process each transaction
+			// Process new transactions
 			for _, txID := range txIDs {
-				tx, err := mt.client.GetMempoolTransaction(txID)
-				if err != nil {
-					log.Printf("Error getting transaction %s: %v", txID, err)
+				// Check if we already have this transaction
+				if mt.HasTransaction(txID) {
 					continue
 				}
 
-				// Convert to our transaction type
+				// Get transaction details
+				tx, err := mt.client.GetMempoolTransaction(txID)
+				if err != nil {
+					log.Printf("Failed to get transaction %s: %v", txID, err)
+					continue
+				}
+
+				// Create a new transaction
 				mempoolTx := &Transaction{
 					TxID:        txID,
 					BlockHash:   "",
@@ -81,9 +203,36 @@ func (mt *MempoolTracker) Start(ctx context.Context) {
 					Address:     tx["address"].(string),
 				}
 
-				// Add to mempool if address is being tracked
+				// Get or create address
+				addr, err := db.GetOrCreateAddress(mt.db, mempoolTx.Address)
+				if err != nil {
+					log.Printf("Failed to get or create address %s: %v", mempoolTx.Address, err)
+					continue
+				}
+
+				// Convert to database transaction
+				dbTx := &db.Transaction{
+					AddressID:     addr.ID,
+					TxID:          mempoolTx.TxID,
+					BlockHash:     mempoolTx.BlockHash,
+					BlockHeight:   mempoolTx.BlockHeight,
+					Amount:        mempoolTx.Amount,
+					IsIncoming:    mempoolTx.IsIncoming,
+					Confirmations: 0,
+					Status:        "pending",
+				}
+
+				// Check if the address in the transaction is being tracked
 				if mt.IsAddressTracked(mempoolTx.Address) {
-					mt.AddTransaction(mempoolTx)
+					// Add transaction to database
+					if err := db.AddTransaction(mt.db, dbTx); err != nil {
+						log.Printf("Failed to add transaction to database: %v", err)
+					}
+
+					// Update address balance
+					if err := db.UpdateAddressBalanceWithTransaction(mt.db, mempoolTx.Address, dbTx); err != nil {
+						log.Printf("Failed to update address balance: %v", err)
+					}
 				}
 			}
 		}
@@ -94,21 +243,21 @@ func (mt *MempoolTracker) Start(ctx context.Context) {
 func (mt *MempoolTracker) AddAddress(address string) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	mt.addresses[address] = true
+	mt.trackedAddresses[address] = true
 }
 
 // RemoveAddress removes an address from tracking
 func (mt *MempoolTracker) RemoveAddress(address string) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	delete(mt.addresses, address)
+	delete(mt.trackedAddresses, address)
 }
 
 // IsAddressTracked checks if an address is being tracked
 func (mt *MempoolTracker) IsAddressTracked(address string) bool {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
-	return mt.addresses[address]
+	return mt.trackedAddresses[address]
 }
 
 // AddTransaction adds a transaction to the mempool and updates the address balance
@@ -117,7 +266,7 @@ func (mt *MempoolTracker) AddTransaction(tx *Transaction) {
 	defer mt.mu.Unlock()
 
 	// Only track if address is being monitored
-	if !mt.addresses[tx.Address] {
+	if !mt.trackedAddresses[tx.Address] {
 		return
 	}
 
@@ -193,4 +342,12 @@ func (mt *MempoolTracker) convertToDBTransaction(tx *Transaction) *db.Transactio
 		Status:        "pending",
 		CreatedAt:     time.Now(),
 	}
+}
+
+// HasTransaction checks if a transaction is already being tracked
+func (mt *MempoolTracker) HasTransaction(txID string) bool {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	_, exists := mt.transactions[txID]
+	return exists
 }

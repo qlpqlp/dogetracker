@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -73,6 +72,7 @@ func main() {
 	rpcPort := flag.Int("rpc-port", getEnvIntOrDefault("DOGE_RPC_PORT", 22555), "Dogecoin RPC port")
 	rpcUser := flag.String("rpc-user", getEnvOrDefault("DOGE_RPC_USER", "dogecoin"), "Dogecoin RPC username")
 	rpcPass := flag.String("rpc-pass", getEnvOrDefault("DOGE_RPC_PASS", "dogecoin"), "Dogecoin RPC password")
+	startBlock := flag.String("start-block", getEnvOrDefault("START_BLOCK", "0"), "Starting block height")
 
 	flag.Parse()
 
@@ -108,9 +108,10 @@ func main() {
 
 	// Create mempool tracker
 	mempoolTracker := mempool.NewMempoolTracker(dbConn, client)
-	for _, addr := range trackedAddresses {
-		mempoolTracker.AddAddress(addr)
+	if err := mempoolTracker.Start(*startBlock); err != nil {
+		log.Fatalf("Failed to start mempool tracker: %v", err)
 	}
+	defer mempoolTracker.Stop()
 
 	// Create API server
 	server := api.NewServer(dbConn, *apiToken, mempoolTracker)
@@ -121,10 +122,6 @@ func main() {
 			log.Fatalf("Error starting API server: %v", err)
 		}
 	}()
-
-	// Start mempool tracker
-	ctx := context.Background()
-	go mempoolTracker.Start(ctx)
 
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
