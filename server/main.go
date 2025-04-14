@@ -11,6 +11,7 @@ import (
 
 	"github.com/dogeorg/dogetracker/pkg/core"
 	"github.com/dogeorg/dogetracker/server/api"
+	"github.com/dogeorg/dogetracker/server/db"
 	"github.com/dogeorg/dogetracker/server/mempool"
 	_ "github.com/lib/pq"
 )
@@ -82,14 +83,14 @@ func main() {
 	// Connect to database
 	dbConnStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		*dbHost, *dbPort, *dbUser, *dbPass, *dbName)
-	db, err := sql.Open("postgres", dbConnStr)
+	dbConn, err := sql.Open("postgres", dbConnStr)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer db.Close()
+	defer dbConn.Close()
 
 	// Initialize database schema
-	if err := db.InitDB(); err != nil {
+	if err := db.InitDB(dbConn); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
@@ -97,7 +98,7 @@ func main() {
 	client := core.NewCoreRPCClient(*rpcHost, *rpcPort, *rpcUser, *rpcPass)
 
 	// Create mempool tracker
-	tracker := mempool.NewMempoolTracker(client, db)
+	tracker := mempool.NewMempoolTracker(client, dbConn)
 
 	// Start the mempool tracker
 	if err := tracker.Start(); err != nil {
@@ -105,7 +106,7 @@ func main() {
 	}
 
 	// Set up API server
-	api.SetDB(db)
+	api.SetDB(dbConn)
 	api.SetToken(*apiToken)
 	api.SetTracker(tracker)
 	http.HandleFunc("/api/track", api.TrackAddressHandler)
