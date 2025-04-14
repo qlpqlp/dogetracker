@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/qlpqlp/dogetracker/pkg/tracker"
+	"github.com/dogeorg/dogetracker/pkg/tracker"
 )
 
 // API represents the API server

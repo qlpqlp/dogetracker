@@ -18,34 +18,12 @@ const (
 	// Protocol version
 	ProtocolVersion = 70015
 
-	// Message types
-	MsgVersion    = "version"
-	MsgVerack     = "verack"
-	MsgGetHeaders = "getheaders"
-	MsgHeaders    = "headers"
-	MsgGetData    = "getdata"
-	MsgBlock      = "block"
-	MsgTx         = "tx"
-	MsgInv        = "inv"
-	MsgFilterLoad = "filterload"
-	MsgPing       = "ping"
-	MsgPong       = "pong"
-
 	// MaxMessageSize is the maximum allowed size for a message
 	MaxMessageSize = 32 * 1024 * 1024 // 32MB
 
 	// MaxHeadersResults is the maximum number of headers to request in one getheaders message
 	MaxHeadersResults = 1000
 )
-
-// Message represents a Dogecoin protocol message
-type Message struct {
-	Magic    [4]byte
-	Command  [12]byte
-	Length   uint32
-	Checksum [4]byte
-	Payload  []byte
-}
 
 // SPVNode represents a Simplified Payment Verification node
 type SPVNode struct {
@@ -172,8 +150,15 @@ func (n *SPVNode) ConnectToPeer(peer string) error {
 	}
 
 	// Send verack
+	verackMsg := &Message{
+		Magic:    0xc0c0c0c0,
+		Length:   0,
+		Checksum: [4]byte{},
+	}
+	copy(verackMsg.Command[:], MsgVerack)
+
 	n.logger.Printf("Sending verack...")
-	if err := n.sendMessage(MsgVerack, nil); err != nil {
+	if err := n.sendMessage(verackMsg); err != nil {
 		n.conn.Close()
 		n.conn = nil
 		n.connected = false
@@ -209,7 +194,7 @@ func (n *SPVNode) ConnectToPeer(peer string) error {
 
 	// Send getheaders message
 	n.logger.Printf("Sending getheaders message...")
-	if err := n.sendGetHeaders(); err != nil {
+	if err := n.sendGetHeaders(n.chainParams.GenesisBlock); err != nil {
 		n.conn.Close()
 		n.conn = nil
 		n.connected = false
@@ -373,159 +358,20 @@ func (n *SPVNode) sendHeadersMessage(headers []BlockHeader) error {
 		payload = append(payload, 0x00)
 	}
 
-	// Send message
-	return n.sendMessage(MsgHeaders, payload)
-}
-
-// readMessage reads a message from the connection
-func (n *SPVNode) readMessage() (*Message, error) {
-	// Read message header (24 bytes)
-	header := make([]byte, 24)
-	if _, err := io.ReadFull(n.conn, header); err != nil {
-		return nil, fmt.Errorf("failed to read message header: %v", err)
-	}
-
-	// Parse message length
-	length := binary.LittleEndian.Uint32(header[16:20])
-	if length > MaxMessageSize {
-		return nil, fmt.Errorf("message size %d exceeds maximum allowed size %d", length, MaxMessageSize)
-	}
-
-	// Read message payload
-	payload := make([]byte, length)
-	if length > 0 {
-		if _, err := io.ReadFull(n.conn, payload); err != nil {
-			return nil, fmt.Errorf("failed to read message payload: %v", err)
-		}
-	}
-
 	// Create message
+	checksum := doubleSha256(payload)[:4]
+	var checksumArray [4]byte
+	copy(checksumArray[:], checksum)
+
 	msg := &Message{
-		Magic:   [4]byte{header[0], header[1], header[2], header[3]},
-		Command: [12]byte{},
-		Length:  length,
-		Payload: payload,
+		Magic:    0xc0c0c0c0,
+		Length:   uint32(len(payload)),
+		Checksum: checksumArray,
+		Payload:  payload,
 	}
-	copy(msg.Command[:], header[4:16])
+	copy(msg.Command[:], MsgHeaders)
 
-	// Verify checksum
-	hash1 := sha256.Sum256(payload)
-	hash2 := sha256.Sum256(hash1[:])
-	if !bytes.Equal(hash2[:4], header[20:24]) {
-		return nil, fmt.Errorf("invalid message checksum")
-	}
-
-	return msg, nil
-}
-
-// sendMessage sends a message to the peer
-func (n *SPVNode) sendMessage(command string, payload []byte) error {
-	msg := &Message{
-		Magic:   [4]byte{0xc0, 0xc0, 0xc0, 0xc0}, // Dogecoin magic number
-		Length:  uint32(len(payload)),
-		Payload: payload,
-	}
-
-	// Set command
-	copy(msg.Command[:], command)
-
-	// Calculate checksum
-	hash := sha256.Sum256(payload)
-	hash = sha256.Sum256(hash[:])
-	copy(msg.Checksum[:], hash[:4])
-
-	// Write message
-	if err := binary.Write(n.conn, binary.LittleEndian, msg.Magic); err != nil {
-		return err
-	}
-	if err := binary.Write(n.conn, binary.LittleEndian, msg.Command); err != nil {
-		return err
-	}
-	if err := binary.Write(n.conn, binary.LittleEndian, msg.Length); err != nil {
-		return err
-	}
-	if err := binary.Write(n.conn, binary.LittleEndian, msg.Checksum); err != nil {
-		return err
-	}
-	if len(payload) > 0 {
-		if _, err := n.conn.Write(payload); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// sendVersionMessage sends a version message
-func (n *SPVNode) sendVersionMessage() error {
-	// Create version message payload
-	payload := make([]byte, 86) // Version message size
-	binary.LittleEndian.PutUint32(payload[0:4], ProtocolVersion)
-
-	// Services (8 bytes) - NODE_NETWORK
-	binary.LittleEndian.PutUint64(payload[4:12], 1)
-
-	// Timestamp (8 bytes)
-	binary.LittleEndian.PutUint64(payload[12:20], uint64(time.Now().Unix()))
-
-	// Receiver services (8 bytes)
-	binary.LittleEndian.PutUint64(payload[20:28], 1)
-
-	// Receiver IP (16 bytes) - IPv4 mapped to IPv6
-	payload[28] = 0x00
-	payload[29] = 0x00
-	payload[30] = 0x00
-	payload[31] = 0x00
-	payload[32] = 0x00
-	payload[33] = 0x00
-	payload[34] = 0x00
-	payload[35] = 0x00
-	payload[36] = 0x00
-	payload[37] = 0x00
-	payload[38] = 0xFF
-	payload[39] = 0xFF
-	payload[40] = 0x00
-	payload[41] = 0x00
-	payload[42] = 0x00
-	payload[43] = 0x00
-
-	// Receiver port (2 bytes)
-	binary.BigEndian.PutUint16(payload[44:46], 22556)
-
-	// Sender services (8 bytes)
-	binary.LittleEndian.PutUint64(payload[46:54], 1)
-
-	// Sender IP (16 bytes) - IPv4 mapped to IPv6
-	payload[54] = 0x00
-	payload[55] = 0x00
-	payload[56] = 0x00
-	payload[57] = 0x00
-	payload[58] = 0x00
-	payload[59] = 0x00
-	payload[60] = 0x00
-	payload[61] = 0x00
-	payload[62] = 0x00
-	payload[63] = 0x00
-	payload[64] = 0xFF
-	payload[65] = 0xFF
-	payload[66] = 0x00
-	payload[67] = 0x00
-	payload[68] = 0x00
-	payload[69] = 0x00
-
-	// Sender port (2 bytes)
-	binary.BigEndian.PutUint16(payload[70:72], 22556)
-
-	// Nonce (8 bytes)
-	binary.LittleEndian.PutUint64(payload[72:80], uint64(time.Now().UnixNano()))
-
-	// User agent length (varint)
-	payload[80] = 0x00
-
-	// Start height (4 bytes)
-	binary.LittleEndian.PutUint32(payload[82:86], 0)
-
-	return n.sendMessage(MsgVersion, payload)
+	return n.sendMessage(msg)
 }
 
 // sendFilterLoadMessage sends a filter load message
@@ -543,26 +389,43 @@ func (n *SPVNode) sendFilterLoadMessage() error {
 	payload = append(payload, n.bloomFilter...)
 
 	// Number of hash functions (4 bytes)
-	binary.LittleEndian.PutUint32(payload[len(payload):len(payload)+4], 11)
+	hashFuncs := make([]byte, 4)
+	binary.LittleEndian.PutUint32(hashFuncs, 11)
+	payload = append(payload, hashFuncs...)
 
 	// Tweak (4 bytes)
-	binary.LittleEndian.PutUint32(payload[len(payload):len(payload)+4], uint32(time.Now().UnixNano()))
+	tweak := make([]byte, 4)
+	binary.LittleEndian.PutUint32(tweak, uint32(time.Now().UnixNano()))
+	payload = append(payload, tweak...)
 
 	// Flags (1 byte)
 	payload = append(payload, 0x01) // BLOOM_UPDATE_ALL
 
-	return n.sendMessage(MsgFilterLoad, payload)
+	// Create message
+	checksum := doubleSha256(payload)[:4]
+	var checksumArray [4]byte
+	copy(checksumArray[:], checksum)
+
+	msg := &Message{
+		Magic:    0xc0c0c0c0,
+		Length:   uint32(len(payload)),
+		Checksum: checksumArray,
+		Payload:  payload,
+	}
+	copy(msg.Command[:], MsgFilterLoad)
+
+	return n.sendMessage(msg)
 }
 
 // sendGetHeaders sends a getheaders message to request headers
-func (n *SPVNode) sendGetHeaders() error {
+func (n *SPVNode) sendGetHeaders(genesisBlock string) error {
 	// Create block locator hashes
 	var locatorHashes [][]byte
 
 	// If we have no headers yet, start from the requested height
 	if len(n.headers) == 0 {
 		// Use genesis block hash from chain params
-		genesisHash, err := hex.DecodeString(n.chainParams.GenesisBlock)
+		genesisHash, err := hex.DecodeString(genesisBlock)
 		if err != nil {
 			return fmt.Errorf("failed to decode genesis block hash: %v", err)
 		}
@@ -587,42 +450,43 @@ func (n *SPVNode) sendGetHeaders() error {
 	}
 
 	// Create payload
-	var payload []byte
+	buf := new(bytes.Buffer)
 
 	// Protocol version (4 bytes)
-	versionBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(versionBytes, 70015) // Dogecoin protocol version
-	payload = append(payload, versionBytes...)
+	binary.Write(buf, binary.LittleEndian, int32(70015))
 
 	// Hash count (varint)
 	hashCount := uint64(len(locatorHashes))
 	hashCountBytes := make([]byte, binary.MaxVarintLen64)
 	bytesWritten := binary.PutUvarint(hashCountBytes, hashCount)
-	payload = append(payload, hashCountBytes[:bytesWritten]...)
+	buf.Write(hashCountBytes[:bytesWritten])
 
 	// Block locator hashes
 	for _, hash := range locatorHashes {
-		payload = append(payload, hash...)
+		buf.Write(hash)
 	}
 
-	// Stop hash (32 bytes of zeros to request all headers)
+	// Stop hash (32 bytes of zeros to get all headers)
 	stopHash := make([]byte, 32)
-	payload = append(payload, stopHash...)
+	buf.Write(stopHash)
+
+	payload := buf.Bytes()
+
+	// Create message
+	checksum := doubleSha256(payload)[:4]
+	var checksumArray [4]byte
+	copy(checksumArray[:], checksum)
+
+	msg := &Message{
+		Magic:    0xc0c0c0c0,
+		Length:   uint32(len(payload)),
+		Checksum: checksumArray,
+		Payload:  payload,
+	}
+	copy(msg.Command[:], MsgGetHeaders)
 
 	n.logger.Printf("Sending getheaders message with %d locator hashes, starting from height %d", len(locatorHashes), n.startHeight)
-	return n.sendMessage(MsgGetHeaders, payload)
-}
-
-// handleVersionMessage handles a version message
-func (n *SPVNode) handleVersionMessage(payload []byte) error {
-	// Parse version message
-	version := binary.LittleEndian.Uint32(payload[0:4])
-	if version < ProtocolVersion {
-		return fmt.Errorf("peer version %d is too old", version)
-	}
-
-	// Send verack
-	return n.sendMessage(MsgVerack, nil)
+	return n.sendMessage(msg)
 }
 
 // handleHeadersMessage handles a headers message
@@ -644,7 +508,7 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		if reader.Len() < 80 { // Minimum size for a header
 			n.logger.Printf("Partial headers message received, processed %d headers, requesting more", headersProcessed)
 			// Request more headers from where we left off
-			if err := n.sendGetHeaders(); err != nil {
+			if err := n.sendGetHeaders(n.chainParams.GenesisBlock); err != nil {
 				return fmt.Errorf("error requesting more headers: %v", err)
 			}
 			return nil
@@ -722,7 +586,7 @@ func (n *SPVNode) handleHeadersMessage(payload []byte) error {
 		// Request more headers if we haven't reached the target height
 		if n.currentHeight < n.bestKnownHeight {
 			n.logger.Printf("Requesting more headers from height %d", n.currentHeight+1)
-			return n.sendGetHeaders()
+			return n.sendGetHeaders(n.chainParams.GenesisBlock)
 		} else {
 			n.logger.Printf("Reached target height %d", n.currentHeight)
 			n.headerSyncComplete = true
@@ -848,8 +712,19 @@ func (n *SPVNode) handleInvMessage(payload []byte) error {
 // handlePingMessage handles a ping message
 func (n *SPVNode) handlePingMessage(payload []byte) error {
 	// Send pong message with same nonce
-	log.Printf("Received ping message, sending pong")
-	return n.sendMessage(MsgPong, payload)
+	checksum := doubleSha256(payload)[:4]
+	var checksumArray [4]byte
+	copy(checksumArray[:], checksum)
+
+	msg := &Message{
+		Magic:    0xc0c0c0c0,
+		Length:   uint32(len(payload)),
+		Checksum: checksumArray,
+		Payload:  payload,
+	}
+	copy(msg.Command[:], MsgPong)
+
+	return n.sendMessage(msg)
 }
 
 // AddWatchAddress adds an address to watch
@@ -1064,9 +939,22 @@ func (n *SPVNode) GetBlockTransactions(blockHash string) ([]*Transaction, error)
 	payload[0] = 1                // Count of 1
 	copy(payload[1:], hashBytes)
 
+	// Create message
+	checksum := doubleSha256(payload)[:4]
+	var checksumArray [4]byte
+	copy(checksumArray[:], checksum)
+
+	msg := &Message{
+		Magic:    0xc0c0c0c0,
+		Length:   uint32(len(payload)),
+		Checksum: checksumArray,
+		Payload:  payload,
+	}
+	copy(msg.Command[:], MsgGetData)
+
 	// Send getdata message
 	n.logger.Printf("Sending getdata message for block %s", blockHash)
-	if err := n.sendMessage(MsgGetData, payload); err != nil {
+	if err := n.sendMessage(msg); err != nil {
 		n.connected = false
 		return nil, fmt.Errorf("failed to send getdata message: %v", err)
 	}
@@ -1440,7 +1328,20 @@ func (n *SPVNode) sendGetBlocks() error {
 	stopHash := make([]byte, 32)
 	payload = append(payload, stopHash...)
 
+	// Create message
+	checksum := doubleSha256(payload)[:4]
+	var checksumArray [4]byte
+	copy(checksumArray[:], checksum)
+
+	msg := &Message{
+		Magic:    0xc0c0c0c0,
+		Length:   uint32(len(payload)),
+		Checksum: checksumArray,
+		Payload:  payload,
+	}
+	copy(msg.Command[:], "getblocks")
+
 	n.logger.Printf("Sending getblocks message with payload length: %d", len(payload))
 	n.logger.Printf("Requesting blocks starting from height %d", n.currentHeight)
-	return n.sendMessage("getblocks", payload)
+	return n.sendMessage(msg)
 }

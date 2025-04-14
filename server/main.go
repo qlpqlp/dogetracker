@@ -21,11 +21,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dogeorg/dogetracker/pkg/api"
+	"github.com/dogeorg/dogetracker/pkg/doge"
+	"github.com/dogeorg/dogetracker/pkg/tracker"
+	serverdb "github.com/dogeorg/dogetracker/server/db"
 	_ "github.com/lib/pq"
-	"github.com/qlpqlp/dogetracker/pkg/api"
-	"github.com/qlpqlp/dogetracker/pkg/doge"
-	"github.com/qlpqlp/dogetracker/pkg/tracker"
-	serverdb "github.com/qlpqlp/dogetracker/server/db"
 )
 
 var (

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"time"
@@ -166,53 +165,6 @@ func (n *SPVNode) sendVerackMessage() error {
 	}
 	copy(message.Command[:], MsgVerack)
 
-	return n.sendMessage(message)
-}
-
-// sendGetHeaders sends a getheaders message
-func (n *SPVNode) sendGetHeaders(blockHash string) error {
-	// Create payload
-	buf := new(bytes.Buffer)
-
-	// Version (4 bytes)
-	binary.Write(buf, binary.LittleEndian, int32(70015))
-
-	// Hash count (varint)
-	// For now, we just send one hash
-	buf.Write([]byte{0x01})
-
-	// Block locator hashes
-	hash, err := hex.DecodeString(blockHash)
-	if err != nil {
-		return fmt.Errorf("invalid block hash: %v", err)
-	}
-	// Reverse the hash (Dogecoin uses little-endian)
-	for i, j := 0, len(hash)-1; i < j; i, j = i+1, j-1 {
-		hash[i], hash[j] = hash[j], hash[i]
-	}
-	buf.Write(hash)
-
-	// Stop hash (32 bytes of zeros to get all headers)
-	stopHash := make([]byte, 32)
-	buf.Write(stopHash)
-
-	payload := buf.Bytes()
-
-	// Calculate checksum
-	checksum := doubleSha256(payload)[:4]
-	var checksumArray [4]byte
-	copy(checksumArray[:], checksum)
-
-	// Create message
-	message := &Message{
-		Magic:    0xc0c0c0c0, // Dogecoin magic number
-		Length:   uint32(len(payload)),
-		Checksum: checksumArray,
-		Payload:  payload,
-	}
-	copy(message.Command[:], MsgGetHeaders)
-
-	n.logger.Printf("Sending getheaders message for block %s (payload length: %d)", blockHash, len(payload))
 	return n.sendMessage(message)
 }
 
