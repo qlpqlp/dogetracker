@@ -134,31 +134,40 @@ func main() {
 	}
 
 	// Determine start block
-	startBlock := config.startBlock
-	if startBlock == "0" && err == nil {
+	var startBlockStr string
+	if config.startBlock == 0 && err == nil {
 		// If no start block specified and we have a last processed block, start from the next block
-		startBlock = strconv.FormatInt(lastBlockHeight+1, 10)
+		startBlockStr = strconv.FormatInt(lastBlockHeight+1, 10)
 		log.Printf("Resuming from last processed block in database: height %d, hash %s", lastBlockHeight, lastBlockHash)
-	} else if startBlock == "0" {
+	} else if config.startBlock == 0 {
 		// If no start block specified and no last processed block, start from current height
 		currentHeight, err := rpcClient.GetBlockCount()
 		if err != nil {
 			log.Fatalf("Failed to get current block height: %v", err)
 		}
-		startBlock = strconv.FormatInt(currentHeight, 10)
+		startBlockStr = strconv.FormatInt(currentHeight, 10)
 		log.Printf("Starting from current block height: %d", currentHeight)
+	} else {
+		// Use the specified start block
+		startBlockStr = strconv.FormatInt(config.startBlock, 10)
 	}
 
 	// Start mempool tracker
-	if err := tracker.Start(startBlock); err != nil {
+	if err := tracker.Start(startBlockStr); err != nil {
 		log.Fatalf("Failed to start mempool tracker: %v", err)
 	}
 
 	// Set up API server
 	api.SetDB(dbConn)
 	http.HandleFunc("/api/track", api.TrackAddressHandler)
-	http.HandleFunc("/api/balance", api.GetBalanceHandler)
-	http.HandleFunc("/api/transactions", api.GetTransactionsHandler)
+	http.HandleFunc("/api/balance", func(w http.ResponseWriter, r *http.Request) {
+		// TODO: Implement balance handler
+		http.Error(w, "Not implemented", http.StatusNotImplemented)
+	})
+	http.HandleFunc("/api/transactions", func(w http.ResponseWriter, r *http.Request) {
+		// TODO: Implement transactions handler
+		http.Error(w, "Not implemented", http.StatusNotImplemented)
+	})
 
 	// Start API server
 	log.Printf("Starting API server on port %d", config.apiPort)
