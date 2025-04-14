@@ -76,10 +76,17 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 		return fmt.Errorf("failed to decode transaction: %v", err)
 	}
 
+	// Get current block height for confirmations
+	currentHeight, err := t.client.GetBlockCount()
+	if err != nil {
+		return fmt.Errorf("failed to get current block height: %v", err)
+	}
+	confirmations := int(currentHeight - height + 1)
+
 	// Track all addresses involved in the transaction
 	involvedAddresses := make(map[string]bool)
 
-	// Process inputs first to get from_addresses
+	// Process inputs first to get from_addresses and remove spent outputs
 	for _, vin := range txDetails.Vin {
 		if vin.TxID != "" { // Skip coinbase
 			prevTx, err := t.client.GetRawTransaction(vin.TxID)
@@ -113,7 +120,7 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 							BlockHash:     blockHash,
 							BlockHeight:   height,
 							IsIncoming:    false,
-							Confirmations: 1,
+							Confirmations: confirmations,
 							FromAddress:   fromAddr,
 							ToAddress:     "", // Will be set when processing outputs
 							Status:        "pending",
@@ -162,7 +169,7 @@ func (t *MempoolTracker) processTransaction(txID string, blockHash string, heigh
 					BlockHash:     blockHash,
 					BlockHeight:   height,
 					IsIncoming:    true,
-					Confirmations: 1,
+					Confirmations: confirmations,
 					FromAddress:   fromAddr,
 					ToAddress:     toAddr,
 					Status:        "pending",
