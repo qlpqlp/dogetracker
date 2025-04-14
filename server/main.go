@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -118,10 +119,12 @@ func main() {
 	}
 
 	// Start API server
-	apiServer := api.NewServer(db, config.apiToken)
 	go func() {
+		// Set database connection for API handlers
+		api.SetDB(db)
+
 		log.Printf("Starting API server on port %d", config.apiPort)
-		if err := apiServer.Start(config.apiPort); err != nil {
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", config.apiPort), nil); err != nil {
 			log.Printf("API server error: %v", err)
 		}
 	}()
