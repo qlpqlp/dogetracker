@@ -12,11 +12,11 @@ import (
 	"syscall"
 
 	"github.com/dogeorg/doge"
-	_ "github.com/lib/pq"
 	"github.com/dogeorg/dogetracker/pkg/chaser"
 	"github.com/dogeorg/dogetracker/pkg/core"
 	"github.com/dogeorg/dogetracker/pkg/walker"
 	"github.com/dogeorg/dogetracker/server/api"
+	_ "github.com/lib/pq"
 )
 
 type Config struct {
@@ -137,13 +137,48 @@ func main() {
 
 	// Get the block hash for the start height
 	startBlockHash := "0e0bd6be24f5f426a505694bf46f60301a3a08dfdfda13854fdfe0ce7d455d6f" // Default genesis block
-	if config.startBlock > 0 {
-		var err error
+	startHeight := int64(0)
+
+	// First try to get the last processed block from the database
+	var lastBlockHeight int64
+	var lastBlockHash string
+	err = db.QueryRow("SELECT block_height, block_hash FROM last_processed_block ORDER BY id DESC LIMIT 1").Scan(&lastBlockHeight, &lastBlockHash)
+	if err == nil {
+		// Found a last processed block in the database
+		startHeight = lastBlockHeight
+		startBlockHash = lastBlockHash
+		log.Printf("Resuming from last processed block in database: height %d, hash %s", startHeight, startBlockHash)
+	} else if config.startBlock > 0 {
+		// No database record found, but start-block flag was provided
+		startHeight = config.startBlock
 		startBlockHash, err = blockchain.GetBlockHash(config.startBlock)
 		if err != nil {
 			log.Printf("Failed to get block hash for height %d: %v", config.startBlock, err)
 			os.Exit(1)
 		}
+		log.Printf("Starting from specified block height: %d", config.startBlock)
+	} else {
+		// No database record and no start-block flag, get current height
+		currentHeight, err := blockchain.GetBlockCount()
+		if err != nil {
+			log.Printf("Failed to get current block height: %v", err)
+			os.Exit(1)
+		}
+		startHeight = currentHeight
+		startBlockHash, err = blockchain.GetBlockHash(currentHeight)
+		if err != nil {
+			log.Printf("Failed to get block hash for current height %d: %v", currentHeight, err)
+			os.Exit(1)
+		}
+		log.Printf("Starting from current block height: %d", currentHeight)
+	}
+
+	// Update the last processed block in the database
+	_, err = db.Exec("UPDATE last_processed_block SET block_height = $1, block_hash = $2, processed_at = CURRENT_TIMESTAMP",
+		startHeight, startBlockHash)
+	if err != nil {
+		log.Printf("Failed to update last processed block in database: %v", err)
+		// Continue anyway, this is not critical
 	}
 
 	// Walk the blockchain.
@@ -173,6 +208,14 @@ func main() {
 					// 2. Updating transaction records
 					// 3. Updating unspent outputs
 					// 4. Updating address balances
+
+					// Update the last processed block in the database
+					_, err := db.Exec("UPDATE last_processed_block SET block_height = $1, block_hash = $2, processed_at = CURRENT_TIMESTAMP",
+						b.Block.Height, b.Block.Hash)
+					if err != nil {
+						log.Printf("Failed to update last processed block in database: %v", err)
+						// Continue anyway, this is not critical
+					}
 				} else {
 					log.Printf("Undoing to: %v (%v)", b.Undo.ResumeFromBlock, b.Undo.LastValidHeight)
 					// TODO: Handle chain reorganization
@@ -180,6 +223,14 @@ func main() {
 					// 1. Removing transactions from invalid blocks
 					// 2. Updating unspent outputs
 					// 3. Recalculating balances
+
+					// Update the last processed block in the database after reorganization
+					_, err := db.Exec("UPDATE last_processed_block SET block_height = $1, block_hash = $2, processed_at = CURRENT_TIMESTAMP",
+						b.Undo.LastValidHeight, b.Undo.ResumeFromBlock)
+					if err != nil {
+						log.Printf("Failed to update last processed block in database: %v", err)
+						// Continue anyway, this is not critical
+					}
 				}
 			}
 		}
