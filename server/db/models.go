@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -48,52 +49,65 @@ func InitDB(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS tracked_addresses (
 			id SERIAL PRIMARY KEY,
 			address VARCHAR(34) UNIQUE NOT NULL,
-			balance DECIMAL(20,8) NOT NULL DEFAULT 0,
-			required_confirmations INTEGER NOT NULL DEFAULT 6,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			balance DECIMAL(20,8) DEFAULT 0,
+			last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			required_confirmations INTEGER DEFAULT 6,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create tracked_addresses table: %v", err)
 	}
 
 	// Create transactions table
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS transactions (
 			id SERIAL PRIMARY KEY,
-			address_id INTEGER NOT NULL REFERENCES tracked_addresses(id),
+			address_id INTEGER REFERENCES tracked_addresses(id),
 			tx_id VARCHAR(64) NOT NULL,
+			amount DECIMAL(20,8) NOT NULL,
 			block_hash VARCHAR(64),
 			block_height BIGINT,
-			amount DECIMAL(20,8) NOT NULL,
 			is_incoming BOOLEAN NOT NULL,
-			confirmations INTEGER NOT NULL DEFAULT 0,
+			confirmations INTEGER DEFAULT 0,
 			from_address VARCHAR(34),
 			to_address VARCHAR(34),
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(address_id, tx_id)
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(tx_id, address_id)
 		)
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create transactions table: %v", err)
 	}
 
 	// Create unspent_outputs table
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS unspent_outputs (
 			id SERIAL PRIMARY KEY,
-			address_id INTEGER NOT NULL REFERENCES tracked_addresses(id),
+			address_id INTEGER REFERENCES tracked_addresses(id),
 			tx_id VARCHAR(64) NOT NULL,
 			vout INTEGER NOT NULL,
 			amount DECIMAL(20,8) NOT NULL,
 			script TEXT NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(address_id, tx_id, vout)
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(tx_id, vout)
 		)
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create unspent_outputs table: %v", err)
+	}
+
+	// Create last_processed_block table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS last_processed_block (
+			id SERIAL PRIMARY KEY,
+			block_height BIGINT NOT NULL,
+			block_hash VARCHAR(64) NOT NULL,
+			processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create last_processed_block table: %v", err)
 	}
 
 	// Create indexes
