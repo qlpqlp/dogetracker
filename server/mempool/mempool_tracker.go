@@ -200,6 +200,17 @@ func (t *MempoolTracker) Start(startBlock string) error {
 				continue
 			}
 		}
+
+		// Store the last processed block
+		_, err = t.db.Exec(`
+			INSERT INTO last_processed_block (block_height, block_hash)
+			VALUES ($1, $2)
+			ON CONFLICT (id) DO UPDATE
+			SET block_height = $1, block_hash = $2, processed_at = CURRENT_TIMESTAMP
+		`, height, blockHash)
+		if err != nil {
+			log.Printf("Failed to store last processed block: %v", err)
+		}
 	}
 
 	// Start monitoring mempool in a separate goroutine
