@@ -10,18 +10,18 @@ func GetOrCreateAddress(db *sql.DB, address string) (*TrackedAddress, error) {
 
 	// Try to get existing address
 	err := db.QueryRow(`
-		SELECT id, address, balance, required_confirmations, created_at, updated_at 
+		SELECT id, address, balance, required_confirmations, created_at, last_updated 
 		FROM tracked_addresses 
 		WHERE address = $1
-	`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.UpdatedAt)
+	`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.LastUpdated)
 
 	if err == sql.ErrNoRows {
 		// Create new address
 		err = db.QueryRow(`
 			INSERT INTO tracked_addresses (address, balance, required_confirmations) 
 			VALUES ($1, 0, 6) 
-			RETURNING id, address, balance, required_confirmations, created_at, updated_at
-		`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.UpdatedAt)
+			RETURNING id, address, balance, required_confirmations, created_at, last_updated
+		`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.LastUpdated)
 		if err != nil {
 			return nil, err
 		}
@@ -92,7 +92,7 @@ func GetAddressDetails(db *sql.DB, address string) (*TrackedAddress, []Transacti
 func UpdateAddressBalance(db *sql.DB, addressID int64, balance float64) error {
 	_, err := db.Exec(`
 		UPDATE tracked_addresses 
-		SET balance = $1, updated_at = CURRENT_TIMESTAMP 
+		SET balance = $1, last_updated = CURRENT_TIMESTAMP 
 		WHERE id = $2
 	`, balance, addressID)
 	return err

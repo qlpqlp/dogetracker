@@ -5,14 +5,14 @@ import (
 	"time"
 )
 
-// TrackedAddress represents a Dogecoin address being tracked
+// TrackedAddress represents a tracked address in the database
 type TrackedAddress struct {
 	ID                    int64     `json:"id"`
 	Address               string    `json:"address"`
 	Balance               float64   `json:"balance"`
+	LastUpdated           time.Time `json:"last_updated"`
 	RequiredConfirmations int       `json:"required_confirmations"`
 	CreatedAt             time.Time `json:"created_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 // Transaction represents a Dogecoin transaction involving a tracked address

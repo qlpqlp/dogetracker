@@ -24,6 +24,7 @@ type TrackedAddress struct {
 	Balance               float64
 	LastUpdated           time.Time
 	RequiredConfirmations int
+	CreatedAt             time.Time
 }
 
 // Transaction represents a transaction in the database
