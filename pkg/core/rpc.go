@@ -61,16 +61,59 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 		return nil, fmt.Errorf("error getting block hash: %v", err)
 	}
 
-	// Get raw block data
-	blockHex, err := c.GetBlock(hash)
+	// Get block with transactions
+	var block struct {
+		Tx []struct {
+			Txid string `json:"txid"`
+			Vin  []struct {
+				Txid string `json:"txid"`
+				Vout int    `json:"vout"`
+			} `json:"vin"`
+			Vout []struct {
+				Value        float64 `json:"value"`
+				ScriptPubKey struct {
+					Addresses []string `json:"addresses"`
+				} `json:"scriptPubKey"`
+			} `json:"vout"`
+		} `json:"tx"`
+	}
+
+	// Get block with transaction details (verbosity=2)
+	err = c.Request("getblock", []any{hash, 2}, &block)
 	if err != nil {
 		return nil, fmt.Errorf("error getting block data: %v", err)
 	}
 
-	// Parse block data to find transactions involving the address
-	// For now, we'll return an empty slice since we need to implement the parsing
-	// TODO: Implement block parsing to find transactions
-	return []spec.Transaction{}, nil
+	var transactions []spec.Transaction
+	spentOutputs := make(map[string]bool)
+
+	// First pass: collect spent outputs
+	for _, tx := range block.Tx {
+		for _, vin := range tx.Vin {
+			if vin.Txid != "" {
+				spentOutputs[fmt.Sprintf("%s:%d", vin.Txid, vin.Vout)] = true
+			}
+		}
+	}
+
+	// Second pass: collect transactions for the address
+	for _, tx := range block.Tx {
+		// Check outputs for payments to the address
+		for voutIdx, vout := range tx.Vout {
+			for _, addr := range vout.ScriptPubKey.Addresses {
+				if addr == address {
+					isSpent := spentOutputs[fmt.Sprintf("%s:%d", tx.Txid, voutIdx)]
+					transactions = append(transactions, spec.Transaction{
+						Hash:    tx.Txid,
+						Amount:  vout.Value,
+						IsSpent: isSpent,
+					})
+				}
+			}
+		}
+	}
+
+	return transactions, nil
 }
 
 func (c *CoreRPCClient) Request(method string, params []any, result any) error {

@@ -48,14 +48,7 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 	}
 
 	// Log block information
-	log.Printf("Processing block: Height=%d, Hash=%s, Time=%d, Confirmations=%d",
-		header.Height, header.Hash, header.Time, header.Confirmations)
-
-	// Get raw block data
-	blockHex, err := blockchain.GetBlock(hash)
-	if err != nil {
-		return fmt.Errorf("error getting block data: %v", err)
-	}
+	log.Printf("Processing block: Height=%d, Hash=%s", header.Height, header.Hash)
 
 	// Get all tracked addresses
 	rows, err := db.Query("SELECT id, address FROM addresses")
