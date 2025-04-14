@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 	"github.com/dogeorg/dogetracker/pkg/chaser"
 	"github.com/dogeorg/dogetracker/pkg/core"
 	"github.com/dogeorg/dogetracker/pkg/database"
+	"github.com/dogeorg/dogetracker/pkg/spec"
 )
 
 type Config struct {
@@ -28,6 +30,31 @@ type Config struct {
 	dbName    string
 	apiPort   int
 	apiToken  string
+}
+
+func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockchain, height int64) error {
+	// Get block hash
+	hash, err := blockchain.GetBlockHash(height)
+	if err != nil {
+		return fmt.Errorf("error getting block hash: %v", err)
+	}
+
+	// Get block header for basic info
+	header, err := blockchain.GetBlockHeader(hash)
+	if err != nil {
+		return fmt.Errorf("error getting block header: %v", err)
+	}
+
+	// Log block information
+	log.Printf("Processing block: Height=%d, Hash=%s, Time=%d, Confirmations=%d",
+		header.Height, header.Hash, header.Time, header.Confirmations)
+
+	// Save the processed block
+	if err := db.SaveProcessedBlock(height, hash); err != nil {
+		return fmt.Errorf("error saving processed block: %v", err)
+	}
+
+	return nil
 }
 
 func main() {
@@ -108,23 +135,34 @@ func main() {
 		log.Printf("CoreZMQListener: %v", err)
 		os.Exit(1)
 	}
-	_ = chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
+	tipChanged := chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
 
-	// Get the starting block hash if specified
-	if *startBlock >= 0 {
-		hash, err := blockchain.GetBlockHash(int64(*startBlock))
-		if err != nil {
-			log.Printf("Error getting block hash for height %d: %v", *startBlock, err)
-			os.Exit(1)
-		}
-		log.Printf("Starting from block height %d (hash: %s)", *startBlock, hash)
+	// Process blocks
+	go func() {
+		currentHeight := int64(*startBlock)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tipChanged:
+				// Get current block height
+				blockCount, err := blockchain.GetBlockCount()
+				if err != nil {
+					log.Printf("Error getting block count: %v", err)
+					continue
+				}
 
-		// Save the starting block as processed
-		if err := db.SaveProcessedBlock(int64(*startBlock), hash); err != nil {
-			log.Printf("Error saving processed block: %v", err)
-			os.Exit(1)
+				// Process all blocks up to the current height
+				for height := currentHeight; height <= blockCount; height++ {
+					if err := processBlock(ctx, db, blockchain, height); err != nil {
+						log.Printf("Error processing block %d: %v", height, err)
+						continue
+					}
+					currentHeight = height + 1
+				}
+			}
 		}
-	}
+	}()
 
 	// Hook ^C signal.
 	sigCh := make(chan os.Signal, 1)
