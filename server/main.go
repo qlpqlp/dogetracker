@@ -154,37 +154,43 @@ func main() {
 		startHeight = lastBlockHeight
 		startBlockHash = lastBlockHash
 		log.Printf("Resuming from last processed block in database: height %d, hash %s", startHeight, startBlockHash)
-	} else if config.startBlock > 0 {
-		// No database record found, but start-block flag was provided
-		startHeight = config.startBlock
-		startBlockHash, err = blockchain.GetBlockHash(config.startBlock)
-		if err != nil {
-			log.Printf("Failed to get block hash for height %d: %v", config.startBlock, err)
-			os.Exit(1)
+	} else if err == sql.ErrNoRows {
+		// No record in database, use start-block flag if provided
+		if config.startBlock > 0 {
+			startHeight = config.startBlock
+			startBlockHash, err = blockchain.GetBlockHash(config.startBlock)
+			if err != nil {
+				log.Printf("Failed to get block hash for height %d: %v", config.startBlock, err)
+				os.Exit(1)
+			}
+			log.Printf("Starting from specified block height: %d", config.startBlock)
+		} else {
+			// No database record and no start-block flag, get current height
+			currentHeight, err := blockchain.GetBlockCount()
+			if err != nil {
+				log.Printf("Failed to get current block height: %v", err)
+				os.Exit(1)
+			}
+			startHeight = currentHeight
+			startBlockHash, err = blockchain.GetBlockHash(currentHeight)
+			if err != nil {
+				log.Printf("Failed to get block hash for current height %d: %v", currentHeight, err)
+				os.Exit(1)
+			}
+			log.Printf("Starting from current block height: %d", currentHeight)
 		}
-		log.Printf("Starting from specified block height: %d", config.startBlock)
-	} else {
-		// No database record and no start-block flag, get current height
-		currentHeight, err := blockchain.GetBlockCount()
-		if err != nil {
-			log.Printf("Failed to get current block height: %v", err)
-			os.Exit(1)
-		}
-		startHeight = currentHeight
-		startBlockHash, err = blockchain.GetBlockHash(currentHeight)
-		if err != nil {
-			log.Printf("Failed to get block hash for current height %d: %v", currentHeight, err)
-			os.Exit(1)
-		}
-		log.Printf("Starting from current block height: %d", currentHeight)
-	}
 
-	// Update the last processed block in the database
-	_, err = db.Exec("UPDATE last_processed_block SET block_height = $1, block_hash = $2, processed_at = CURRENT_TIMESTAMP",
-		startHeight, startBlockHash)
-	if err != nil {
-		log.Printf("Failed to update last processed block in database: %v", err)
-		// Continue anyway, this is not critical
+		// Insert initial record
+		_, err = db.Exec("INSERT INTO last_processed_block (block_height, block_hash) VALUES ($1, $2)",
+			startHeight, startBlockHash)
+		if err != nil {
+			log.Printf("Failed to insert initial last processed block in database: %v", err)
+			// Continue anyway, this is not critical
+		}
+	} else {
+		// Database error
+		log.Printf("Failed to query last processed block: %v", err)
+		os.Exit(1)
 	}
 
 	// Walk the blockchain.
