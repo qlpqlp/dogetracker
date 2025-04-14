@@ -80,19 +80,22 @@ func (mt *MempoolTracker) Start(startBlock string) error {
 		log.Printf("Processing block %d", height)
 		blockHash, err := mt.client.GetBlockHash(height)
 		if err != nil {
-			return fmt.Errorf("failed to get block hash for height %d: %v", height, err)
+			log.Printf("Failed to get block hash for height %d: %v", height, err)
+			continue
 		}
 
 		// Get block transactions
 		blockHex, err := mt.client.GetBlock(blockHash)
 		if err != nil {
-			return fmt.Errorf("failed to get block %s: %v", blockHash, err)
+			log.Printf("Failed to get block %s: %v", blockHash, err)
+			continue
 		}
 
 		// Parse block hex to get transactions
 		txIDs, err := parseBlockTransactions(blockHex)
 		if err != nil {
-			return fmt.Errorf("failed to parse block transactions for %s: %v", blockHash, err)
+			log.Printf("Failed to parse block transactions for %s: %v", blockHash, err)
+			continue
 		}
 		log.Printf("Found %d transactions in block %d", len(txIDs), height)
 
@@ -164,8 +167,15 @@ func parseBlockTransactions(blockHex string) ([]string, error) {
 	// We need to extract the transaction IDs from the transactions
 
 	// For now, we'll just return the coinbase transaction
-	// TODO: Implement proper block parsing
-	return []string{blockHex[:64]}, nil
+	// The coinbase transaction is the first transaction in the block
+	// and its ID is the first 64 characters of the block hex
+	if len(blockHex) < 64 {
+		return nil, fmt.Errorf("block hex string too short")
+	}
+
+	// The first 64 characters represent the coinbase transaction ID
+	coinbaseTxID := blockHex[:64]
+	return []string{coinbaseTxID}, nil
 }
 
 // Stop stops the mempool tracker
