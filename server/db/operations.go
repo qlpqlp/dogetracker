@@ -10,18 +10,18 @@ func GetOrCreateAddress(db *sql.DB, address string) (*TrackedAddress, error) {
 
 	// Try to get existing address
 	err := db.QueryRow(`
-		SELECT id, address, balance, created_at, updated_at 
+		SELECT id, address, balance, required_confirmations, created_at, updated_at 
 		FROM tracked_addresses 
 		WHERE address = $1
-	`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.CreatedAt, &addr.UpdatedAt)
+	`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		// Create new address
 		err = db.QueryRow(`
-			INSERT INTO tracked_addresses (address, balance) 
-			VALUES ($1, 0) 
-			RETURNING id, address, balance, created_at, updated_at
-		`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.CreatedAt, &addr.UpdatedAt)
+			INSERT INTO tracked_addresses (address, balance, required_confirmations) 
+			VALUES ($1, 0, 6) 
+			RETURNING id, address, balance, required_confirmations, created_at, updated_at
+		`, address).Scan(&addr.ID, &addr.Address, &addr.Balance, &addr.RequiredConfirmations, &addr.CreatedAt, &addr.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
