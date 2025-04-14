@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qlpqlp/dogetracker/pkg/spec"
-	"github.com/qlpqlp/dogetracker/server/db"
+	"github.com/dogeorg/dogetracker/pkg/spec"
+	"github.com/dogeorg/dogetracker/server/db"
 )
 
 type MempoolTracker struct {

@@ -13,12 +13,12 @@ import (
 
 	"github.com/dogeorg/doge"
 	_ "github.com/lib/pq"
-	"github.com/qlpqlp/dogetracker/pkg/chaser"
-	"github.com/qlpqlp/dogetracker/pkg/core"
-	"github.com/qlpqlp/dogetracker/pkg/mempool"
-	"github.com/qlpqlp/dogetracker/pkg/walker"
-	"github.com/qlpqlp/dogetracker/server/api"
-	serverdb "github.com/qlpqlp/dogetracker/server/db"
+	"github.com/dogeorg/dogetracker/pkg/chaser"
+	"github.com/dogeorg/dogetracker/pkg/core"
+	"github.com/dogeorg/dogetracker/pkg/mempool"
+	"github.com/dogeorg/dogetracker/pkg/walker"
+	"github.com/dogeorg/dogetracker/server/api"
+	serverdb "github.com/dogeorg/dogetracker/server/db"
 )
 
 type Config struct {
