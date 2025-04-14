@@ -29,8 +29,19 @@ func NewDB(host string, port int, user, password, dbname string) (*DB, error) {
 }
 
 func (db *DB) InitSchema() error {
-	// Create addresses table
+	// Drop existing tables in reverse order of dependencies
 	_, err := db.Exec(`
+		DROP TABLE IF EXISTS processed_blocks CASCADE;
+		DROP TABLE IF EXISTS unspent_transactions CASCADE;
+		DROP TABLE IF EXISTS transactions CASCADE;
+		DROP TABLE IF EXISTS addresses CASCADE;
+	`)
+	if err != nil {
+		return fmt.Errorf("error dropping tables: %v", err)
+	}
+
+	// Create addresses table
+	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS addresses (
 			id SERIAL PRIMARY KEY,
 			address VARCHAR(34) UNIQUE NOT NULL,
@@ -54,7 +65,8 @@ func (db *DB) InitSchema() error {
 			confirmations INTEGER DEFAULT 0,
 			is_spent BOOLEAN DEFAULT FALSE,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(address_id, tx_hash)
 		)
 	`)
 	if err != nil {
@@ -71,7 +83,8 @@ func (db *DB) InitSchema() error {
 			block_height BIGINT,
 			confirmations INTEGER DEFAULT 0,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(address_id, tx_hash)
 		)
 	`)
 	if err != nil {
@@ -81,7 +94,7 @@ func (db *DB) InitSchema() error {
 	// Create processed_blocks table (only stores the latest block)
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS processed_blocks (
-			id SERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
 			height BIGINT NOT NULL,
 			hash VARCHAR(64) NOT NULL,
 			processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -91,26 +104,7 @@ func (db *DB) InitSchema() error {
 		return fmt.Errorf("error creating processed_blocks table: %v", err)
 	}
 
-	// Ensure there's only one row in processed_blocks
-	_, err = db.Exec(`
-		CREATE OR REPLACE FUNCTION ensure_single_processed_block()
-		RETURNS TRIGGER AS $$
-		BEGIN
-			DELETE FROM processed_blocks WHERE id != NEW.id;
-			RETURN NEW;
-		END;
-		$$ LANGUAGE plpgsql;
-
-		DROP TRIGGER IF EXISTS ensure_single_processed_block_trigger ON processed_blocks;
-		CREATE TRIGGER ensure_single_processed_block_trigger
-		AFTER INSERT ON processed_blocks
-		FOR EACH ROW
-		EXECUTE FUNCTION ensure_single_processed_block();
-	`)
-	if err != nil {
-		return fmt.Errorf("error creating trigger for processed_blocks: %v", err)
-	}
-
+	// No need for the trigger anymore since we're using a single row with id=1
 	log.Println("Database schema initialized successfully")
 	return nil
 }
@@ -121,8 +115,7 @@ func (db *DB) GetLastProcessedBlock() (*ProcessedBlock, error) {
 	err := db.QueryRow(`
 		SELECT id, height, hash, processed_at
 		FROM processed_blocks
-		ORDER BY height DESC
-		LIMIT 1
+		WHERE id = 1
 	`).Scan(&block.ID, &block.Height, &block.Hash, &block.ProcessedAt)
 
 	if err == sql.ErrNoRows {
@@ -134,11 +127,15 @@ func (db *DB) GetLastProcessedBlock() (*ProcessedBlock, error) {
 	return &block, nil
 }
 
-// SaveProcessedBlock saves the latest processed block
+// SaveProcessedBlock saves/updates the processed block
 func (db *DB) SaveProcessedBlock(height int64, hash string) error {
 	_, err := db.Exec(`
-		INSERT INTO processed_blocks (height, hash)
-		VALUES ($1, $2)
+		INSERT INTO processed_blocks (id, height, hash)
+		VALUES (1, $1, $2)
+		ON CONFLICT (id) DO UPDATE
+		SET height = $1,
+			hash = $2,
+			processed_at = CURRENT_TIMESTAMP
 	`, height, hash)
 	if err != nil {
 		return fmt.Errorf("error saving processed block: %v", err)
