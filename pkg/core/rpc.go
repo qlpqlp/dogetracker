@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -86,86 +85,37 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 	}
 
 	var transactions []spec.Transaction
-	spentOutputs := make(map[string]bool)
 
-	// First pass: collect spent outputs from this block
-	for _, tx := range block.Tx {
-		for _, vin := range tx.Vin {
-			if vin.Txid != "" {
-				spentOutputs[fmt.Sprintf("%s:%d", vin.Txid, vin.Vout)] = true
-			}
-		}
-	}
-
-	// Second pass: collect transactions for the address
+	// Process each transaction in the block
 	for _, tx := range block.Tx {
 		// Check outputs for payments to the address
 		for voutIdx, vout := range tx.Vout {
 			for _, addr := range vout.ScriptPubKey.Addresses {
 				if addr == address {
-					// Check if this output is spent in this block
-					isSpent := spentOutputs[fmt.Sprintf("%s:%d", tx.Txid, voutIdx)]
-
-					// If not spent in this block, check if it's spent in previous blocks
-					if !isSpent {
-						// Use gettxout to check if the output is still unspent
-						var txout struct {
-							Confirmations int64 `json:"confirmations"`
-						}
-						err := c.Request("gettxout", []any{tx.Txid, voutIdx}, &txout)
-						if err != nil {
-							// If gettxout returns an error, it means the output is spent
-							isSpent = true
-						} else if txout.Confirmations == 0 {
-							// If confirmations is 0, check mempool for spending transactions
-							var mempool []string
-							err := c.Request("getrawmempool", []any{}, &mempool)
-							if err != nil {
-								log.Printf("Error getting mempool: %v", err)
-								continue
-							}
-
-							// For each mempool transaction, check if it spends our output
-							for _, memTxID := range mempool {
-								var memTx struct {
-									Vin []struct {
-										Txid string `json:"txid"`
-										Vout int    `json:"vout"`
-									} `json:"vin"`
-								}
-								err := c.Request("getrawtransaction", []any{memTxID, 1}, &memTx)
-								if err != nil {
-									continue
-								}
-
-								for _, vin := range memTx.Vin {
-									if vin.Txid == tx.Txid && vin.Vout == voutIdx {
-										isSpent = true
-										break
-									}
-								}
-								if isSpent {
-									break
-								}
-							}
-						}
+					// Use gettxout to check if the output is still unspent
+					var txout struct {
+						Confirmations int64 `json:"confirmations"`
 					}
+					err := c.Request("gettxout", []any{tx.Txid, voutIdx}, &txout)
 
-					// If we think the transaction is spent, verify it by checking the transaction's status
+					// If gettxout returns an error, it means the output is spent
+					isSpent := err != nil
+
+					// If we think it's spent, verify by checking the transaction's status
 					if isSpent {
 						var rawTx struct {
 							Confirmations int64 `json:"confirmations"`
 						}
 						err := c.Request("getrawtransaction", []any{tx.Txid, 1}, &rawTx)
 						if err == nil && rawTx.Confirmations > 0 {
-							// Transaction is confirmed, so our spent status is accurate
+							// Transaction is confirmed and spent
 							transactions = append(transactions, spec.Transaction{
 								Hash:    tx.Txid,
 								Amount:  vout.Value,
 								IsSpent: true,
 							})
 						} else {
-							// Transaction might not be spent yet, keep it as unspent
+							// Transaction might not be spent yet or is invalid
 							transactions = append(transactions, spec.Transaction{
 								Hash:    tx.Txid,
 								Amount:  vout.Value,
