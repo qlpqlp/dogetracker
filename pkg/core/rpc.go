@@ -106,7 +106,7 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 					// Check if this output is spent in this block
 					isSpent := spentOutputs[fmt.Sprintf("%s:%d", tx.Txid, voutIdx)]
 
-					// If not spent in this block, check if it's spent in mempool or confirmed blocks
+					// If not spent in this block, check if it's spent in previous blocks
 					if !isSpent {
 						// Use gettxout to check if the output is still unspent
 						var txout struct {
@@ -151,11 +151,35 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 						}
 					}
 
-					transactions = append(transactions, spec.Transaction{
-						Hash:    tx.Txid,
-						Amount:  vout.Value,
-						IsSpent: isSpent,
-					})
+					// If we think the transaction is spent, verify it by checking the transaction's status
+					if isSpent {
+						var rawTx struct {
+							Confirmations int64 `json:"confirmations"`
+						}
+						err := c.Request("getrawtransaction", []any{tx.Txid, 1}, &rawTx)
+						if err == nil && rawTx.Confirmations > 0 {
+							// Transaction is confirmed, so our spent status is accurate
+							transactions = append(transactions, spec.Transaction{
+								Hash:    tx.Txid,
+								Amount:  vout.Value,
+								IsSpent: true,
+							})
+						} else {
+							// Transaction might not be spent yet, keep it as unspent
+							transactions = append(transactions, spec.Transaction{
+								Hash:    tx.Txid,
+								Amount:  vout.Value,
+								IsSpent: false,
+							})
+						}
+					} else {
+						// Transaction is definitely unspent
+						transactions = append(transactions, spec.Transaction{
+							Hash:    tx.Txid,
+							Amount:  vout.Value,
+							IsSpent: false,
+						})
+					}
 				}
 			}
 		}
