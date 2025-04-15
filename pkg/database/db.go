@@ -134,3 +134,72 @@ func (db *DB) SaveProcessedBlock(height int64, hash string) error {
 	}
 	return nil
 }
+
+// GetTrackedAddresses returns all addresses being tracked
+func (db *DB) GetTrackedAddresses() ([]string, error) {
+	rows, err := db.Query("SELECT address FROM addresses")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var addresses []string
+	for rows.Next() {
+		var addr string
+		if err := rows.Scan(&addr); err != nil {
+			return nil, err
+		}
+		addresses = append(addresses, addr)
+	}
+	return addresses, nil
+}
+
+// InsertTransaction inserts a new transaction into the database
+func (db *DB) InsertTransaction(txHash, address string, amount float64, height int64) error {
+	_, err := db.Exec(`
+		INSERT INTO transactions (tx_hash, address, amount, block_height, created_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (tx_hash, address) DO NOTHING
+	`, txHash, address, amount, height)
+	return err
+}
+
+// MarkTransactionSpent marks a transaction as spent in the database
+func (db *DB) MarkTransactionSpent(txHash string) error {
+	_, err := db.Exec(`
+		DELETE FROM unspent_transactions
+		WHERE tx_hash = $1
+	`, txHash)
+	return err
+}
+
+// InsertUnspentTransaction inserts a new unspent transaction
+func (db *DB) InsertUnspentTransaction(txHash, address string, amount float64) error {
+	_, err := db.Exec(`
+		INSERT INTO unspent_transactions (tx_hash, address, amount, created_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (tx_hash, address) DO NOTHING
+	`, txHash, address, amount)
+	return err
+}
+
+// GetAddressBalance returns the current balance for an address
+func (db *DB) GetAddressBalance(address string) (float64, error) {
+	var balance float64
+	err := db.QueryRow(`
+		SELECT COALESCE(SUM(amount), 0)
+		FROM unspent_transactions
+		WHERE address = $1
+	`, address).Scan(&balance)
+	return balance, err
+}
+
+// UpdateAddressBalance updates the balance for an address
+func (db *DB) UpdateAddressBalance(address string, balance float64) error {
+	_, err := db.Exec(`
+		UPDATE addresses
+		SET balance = $1, updated_at = NOW()
+		WHERE address = $2
+	`, balance, address)
+	return err
+}

@@ -40,6 +40,10 @@ func CoreZMQListener(ctx context.Context, host string, port int) (<-chan string,
 	if err != nil {
 		return nil, err
 	}
+	err = sock.SetSubscribe("rawtx")
+	if err != nil {
+		return nil, err
+	}
 
 	go func() {
 		for {
@@ -81,6 +85,12 @@ func CoreZMQListener(ctx context.Context, host string, port int) (<-chan string,
 				log.Printf("New transaction detected: %s", txid)
 				// We don't need to do anything with the transaction here
 				// as it will be processed when the block containing it is processed
+			case "rawtx":
+				// This is a raw transaction that might be spending our outputs
+				txid := hex.EncodeToString(msg[1])
+				log.Printf("Raw transaction received: %s", txid)
+				// We'll process this transaction to check if it spends any of our outputs
+				// The transaction processing will happen in the block processing
 			default:
 				log.Printf("Unknown ZMQ message type: %s", tag)
 			}

@@ -35,4 +35,5 @@ type BlockHeader struct {
 	ChainWork         string  `json:"chainwork"`         // (string) Expected number of hashes required to produce the chain up to this block (hex)
 	PreviousBlockHash string  `json:"previousblockhash"` // (string) The hash of the previous block (hex)
 	NextBlockHash     string  `json:"nextblockhash"`     // (string) The hash of the next block (hex)
+	NTx               int32   `json:"ntx"`               // Number of transactions in the block
 }

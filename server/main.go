@@ -41,128 +41,71 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 		return fmt.Errorf("error getting block hash: %v", err)
 	}
 
-	// Get block header for basic info
+	// Get block header
 	header, err := blockchain.GetBlockHeader(hash)
 	if err != nil {
 		return fmt.Errorf("error getting block header: %v", err)
 	}
 
-	// Log block information
-	log.Printf("Processing block: Height=%d, Hash=%s", header.Height, header.Hash)
+	log.Printf("Processing block %d (%s) with %d transactions", height, hash, header.NTx)
 
-	// Get all tracked addresses with their required confirmations
-	rows, err := db.Query("SELECT id, address, required_confirmations FROM addresses")
+	// Get tracked addresses
+	addresses, err := db.GetTrackedAddresses()
 	if err != nil {
 		return fmt.Errorf("error getting tracked addresses: %v", err)
 	}
-	defer rows.Close()
 
-	var addresses []struct {
-		ID                    int64
-		Address               string
-		RequiredConfirmations int64
-	}
-	for rows.Next() {
-		var addr struct {
-			ID                    int64
-			Address               string
-			RequiredConfirmations int64
-		}
-		if err := rows.Scan(&addr.ID, &addr.Address, &addr.RequiredConfirmations); err != nil {
-			return fmt.Errorf("error scanning address: %v", err)
-		}
-		addresses = append(addresses, addr)
-	}
-
-	if len(addresses) == 0 {
-		log.Printf("No addresses to track in block %d", height)
-	} else {
-		log.Printf("Processing transactions for %d tracked addresses in block %d", len(addresses), height)
-	}
-
-	// Process transactions for each address
+	// Process each address
 	for _, addr := range addresses {
-		// Get raw transactions for this address in this block
-		txs, err := blockchain.GetAddressTransactions(addr.Address, height)
+		// Get raw transactions for this address
+		txs, err := blockchain.GetAddressTransactions(addr, height)
 		if err != nil {
-			log.Printf("Error getting transactions for address %s: %v", addr.Address, err)
+			log.Printf("Error getting transactions for address %s: %v", addr, err)
 			continue
-		}
-
-		if len(txs) > 0 {
-			log.Printf("Found %d transactions for address %s in block %d", len(txs), addr.Address, height)
 		}
 
 		// Process each transaction
 		for _, tx := range txs {
-			// Determine if transaction is confirmed based on required confirmations
-			isConfirmed := header.Confirmations >= addr.RequiredConfirmations
-
-			// Store transaction
-			_, err := db.Exec(`
-				INSERT INTO transactions (address_id, tx_hash, amount, block_height, confirmations, is_spent, is_confirmed, created_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-				ON CONFLICT (address_id, tx_hash) DO UPDATE
-				SET confirmations = $5, is_spent = $6, is_confirmed = $7, updated_at = NOW()
-			`, addr.ID, tx.Hash, tx.Amount, height, header.Confirmations, tx.IsSpent, isConfirmed)
+			// Insert transaction into database
+			err = db.InsertTransaction(tx.Hash, addr, tx.Amount, height)
 			if err != nil {
-				log.Printf("Error storing transaction %s for address %s: %v", tx.Hash, addr.Address, err)
+				log.Printf("Error inserting transaction %s: %v", tx.Hash, err)
 				continue
 			}
 
-			// If transaction is unspent, store in unspent_transactions
-			if !tx.IsSpent {
-				_, err := db.Exec(`
-					INSERT INTO unspent_transactions (address_id, tx_hash, amount, block_height, confirmations, is_confirmed, created_at)
-					VALUES ($1, $2, $3, $4, $5, $6, NOW())
-					ON CONFLICT (address_id, tx_hash) DO UPDATE
-					SET confirmations = $5, is_confirmed = $6, updated_at = NOW()
-				`, addr.ID, tx.Hash, tx.Amount, height, header.Confirmations, isConfirmed)
+			// If transaction is spent, remove it from unspent_transactions
+			if tx.IsSpent {
+				err = db.MarkTransactionSpent(tx.Hash)
 				if err != nil {
-					log.Printf("Error storing unspent transaction %s for address %s: %v", tx.Hash, addr.Address, err)
+					log.Printf("Error marking transaction %s as spent: %v", tx.Hash, err)
 					continue
 				}
-				log.Printf("Stored unspent transaction %s for address %s: amount=%f, confirmed=%v", tx.Hash, addr.Address, tx.Amount, isConfirmed)
 			} else {
-				// Remove from unspent if spent
-				_, err := db.Exec(`
-					DELETE FROM unspent_transactions
-					WHERE address_id = $1 AND tx_hash = $2
-				`, addr.ID, tx.Hash)
+				// Add to unspent transactions
+				err = db.InsertUnspentTransaction(tx.Hash, addr, tx.Amount)
 				if err != nil {
-					log.Printf("Error removing spent transaction %s for address %s: %v", tx.Hash, addr.Address, err)
+					log.Printf("Error inserting unspent transaction %s: %v", tx.Hash, err)
 					continue
 				}
-				log.Printf("Removed spent transaction %s for address %s", tx.Hash, addr.Address)
 			}
-		}
 
-		// Update address balance (only count confirmed unspent transactions)
-		var balance float64
-		err = db.QueryRow(`
-			SELECT COALESCE(SUM(amount), 0)
-			FROM unspent_transactions
-			WHERE address_id = $1 AND is_confirmed = true
-		`, addr.ID).Scan(&balance)
-		if err != nil {
-			log.Printf("Error calculating balance for address %s: %v", addr.Address, err)
-			continue
-		}
-
-		// Update address balance in database
-		_, err = db.Exec(`
-			UPDATE addresses
-			SET balance = $1, updated_at = NOW()
-			WHERE id = $2
-		`, balance, addr.ID)
-		if err != nil {
-			log.Printf("Error updating balance for address %s: %v", addr.Address, err)
-			continue
+			// Update address balance
+			balance, err := db.GetAddressBalance(addr)
+			if err != nil {
+				log.Printf("Error getting balance for address %s: %v", addr, err)
+				continue
+			}
+			err = db.UpdateAddressBalance(addr, balance)
+			if err != nil {
+				log.Printf("Error updating balance for address %s: %v", addr, err)
+				continue
+			}
 		}
 	}
 
-	// Save the processed block
-	if err := db.SaveProcessedBlock(height, hash); err != nil {
+	// Save processed block
+	err = db.SaveProcessedBlock(height, hash)
+	if err != nil {
 		return fmt.Errorf("error saving processed block: %v", err)
 	}
 
