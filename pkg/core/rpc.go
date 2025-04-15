@@ -88,6 +88,38 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 
 	// Process each transaction in the block
 	for _, tx := range block.Tx {
+		// Check if this transaction spends any of our outputs
+		for _, vin := range tx.Vin {
+			if vin.Txid != "" {
+				// Get the previous transaction to check if it was to our address
+				var prevTx struct {
+					Vout []struct {
+						ScriptPubKey struct {
+							Addresses []string `json:"addresses"`
+						} `json:"scriptPubKey"`
+					} `json:"vout"`
+				}
+				err := c.Request("getrawtransaction", []any{vin.Txid, 1}, &prevTx)
+				if err != nil {
+					continue
+				}
+
+				// Check if the spent output was to our address
+				if vin.Vout < len(prevTx.Vout) {
+					for _, addr := range prevTx.Vout[vin.Vout].ScriptPubKey.Addresses {
+						if addr == address {
+							// This transaction is spending our output
+							transactions = append(transactions, spec.Transaction{
+								Hash:    vin.Txid,
+								Amount:  0, // We'll get the amount from the original transaction
+								IsSpent: true,
+							})
+						}
+					}
+				}
+			}
+		}
+
 		// Check outputs for payments to the address
 		for voutIdx, vout := range tx.Vout {
 			for _, addr := range vout.ScriptPubKey.Addresses {
