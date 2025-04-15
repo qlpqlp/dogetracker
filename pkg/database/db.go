@@ -156,11 +156,19 @@ func (db *DB) GetTrackedAddresses() ([]string, error) {
 
 // InsertTransaction inserts a new transaction into the database
 func (db *DB) InsertTransaction(txHash, address string, amount float64, height int64) error {
-	_, err := db.Exec(`
-		INSERT INTO transactions (tx_hash, address, amount, block_height, created_at)
-		VALUES ($1, $2, $3, $4, NOW())
-		ON CONFLICT (tx_hash, address) DO NOTHING
-	`, txHash, address, amount, height)
+	// First get the address_id
+	var addressID int64
+	err := db.QueryRow("SELECT id FROM addresses WHERE address = $1", address).Scan(&addressID)
+	if err != nil {
+		return fmt.Errorf("error getting address ID: %v", err)
+	}
+
+	// Insert the transaction
+	_, err = db.Exec(`
+		INSERT INTO transactions (tx_hash, address_id, amount, block_height, confirmations, created_at)
+		VALUES ($1, $2, $3, $4, 1, NOW())
+		ON CONFLICT (address_id, tx_hash) DO NOTHING
+	`, txHash, addressID, amount, height)
 	return err
 }
 
@@ -174,12 +182,20 @@ func (db *DB) MarkTransactionSpent(txHash string) error {
 }
 
 // InsertUnspentTransaction inserts a new unspent transaction
-func (db *DB) InsertUnspentTransaction(txHash, address string, amount float64) error {
-	_, err := db.Exec(`
-		INSERT INTO unspent_transactions (tx_hash, address, amount, created_at)
-		VALUES ($1, $2, $3, NOW())
-		ON CONFLICT (tx_hash, address) DO NOTHING
-	`, txHash, address, amount)
+func (db *DB) InsertUnspentTransaction(txHash, address string, amount float64, height int64) error {
+	// First get the address_id
+	var addressID int64
+	err := db.QueryRow("SELECT id FROM addresses WHERE address = $1", address).Scan(&addressID)
+	if err != nil {
+		return fmt.Errorf("error getting address ID: %v", err)
+	}
+
+	// Insert the unspent transaction
+	_, err = db.Exec(`
+		INSERT INTO unspent_transactions (tx_hash, address_id, amount, block_height, confirmations, created_at)
+		VALUES ($1, $2, $3, $4, 1, NOW())
+		ON CONFLICT (address_id, tx_hash) DO NOTHING
+	`, txHash, addressID, amount, height)
 	return err
 }
 

@@ -82,7 +82,7 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 				}
 			} else {
 				// Add to unspent transactions
-				err = db.InsertUnspentTransaction(tx.Hash, addr, tx.Amount)
+				err = db.InsertUnspentTransaction(tx.Hash, addr, tx.Amount, height)
 				if err != nil {
 					log.Printf("Error inserting unspent transaction %s: %v", tx.Hash, err)
 					continue
