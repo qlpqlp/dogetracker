@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -87,7 +88,7 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 	var transactions []spec.Transaction
 	spentOutputs := make(map[string]bool)
 
-	// First pass: collect spent outputs
+	// First pass: collect spent outputs from this block
 	for _, tx := range block.Tx {
 		for _, vin := range tx.Vin {
 			if vin.Txid != "" {
@@ -102,7 +103,57 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 		for voutIdx, vout := range tx.Vout {
 			for _, addr := range vout.ScriptPubKey.Addresses {
 				if addr == address {
+					// Check if this output is spent in this block
 					isSpent := spentOutputs[fmt.Sprintf("%s:%d", tx.Txid, voutIdx)]
+
+					// If not spent in this block, check if it's spent in mempool
+					if !isSpent {
+						// Get raw transaction to check mempool status
+						var rawTx struct {
+							Confirmations int `json:"confirmations"`
+						}
+						err := c.Request("getrawtransaction", []any{tx.Txid, 1}, &rawTx)
+						if err != nil {
+							log.Printf("Error getting raw transaction %s: %v", tx.Txid, err)
+							continue
+						}
+
+						// If confirmations is 0, it's in mempool and could be spent
+						if rawTx.Confirmations == 0 {
+							// Check mempool for spending transactions
+							var mempool []string
+							err := c.Request("getrawmempool", []any{}, &mempool)
+							if err != nil {
+								log.Printf("Error getting mempool: %v", err)
+								continue
+							}
+
+							// For each mempool transaction, check if it spends our output
+							for _, memTxID := range mempool {
+								var memTx struct {
+									Vin []struct {
+										Txid string `json:"txid"`
+										Vout int    `json:"vout"`
+									} `json:"vin"`
+								}
+								err := c.Request("getrawtransaction", []any{memTxID, 1}, &memTx)
+								if err != nil {
+									continue
+								}
+
+								for _, vin := range memTx.Vin {
+									if vin.Txid == tx.Txid && vin.Vout == voutIdx {
+										isSpent = true
+										break
+									}
+								}
+								if isSpent {
+									break
+								}
+							}
+						}
+					}
+
 					transactions = append(transactions, spec.Transaction{
 						Hash:    tx.Txid,
 						Amount:  vout.Value,
