@@ -30,7 +30,13 @@ func CoreZMQListener(ctx context.Context, host string, port int) (<-chan string,
 	if err != nil {
 		return nil, err
 	}
+
+	// Subscribe to both block and transaction events
 	err = sock.SetSubscribe("hashblock")
+	if err != nil {
+		return nil, err
+	}
+	err = sock.SetSubscribe("hashtx")
 	if err != nil {
 		return nil, err
 	}
@@ -70,10 +76,15 @@ func CoreZMQListener(ctx context.Context, host string, port int) (<-chan string,
 			case "hashblock":
 				id := hex.EncodeToString(msg[1])
 				newTip <- id
+			case "hashtx":
+				txid := hex.EncodeToString(msg[1])
+				log.Printf("New transaction detected: %s", txid)
+				// We don't need to do anything with the transaction here
+				// as it will be processed when the block containing it is processed
 			default:
+				log.Printf("Unknown ZMQ message type: %s", tag)
 			}
 		}
-
 	}()
 	return newTip, nil
 }

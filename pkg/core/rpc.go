@@ -106,21 +106,18 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 					// Check if this output is spent in this block
 					isSpent := spentOutputs[fmt.Sprintf("%s:%d", tx.Txid, voutIdx)]
 
-					// If not spent in this block, check if it's spent in mempool
+					// If not spent in this block, check if it's spent in mempool or confirmed blocks
 					if !isSpent {
-						// Get raw transaction to check mempool status
-						var rawTx struct {
-							Confirmations int `json:"confirmations"`
+						// Use gettxout to check if the output is still unspent
+						var txout struct {
+							Confirmations int64 `json:"confirmations"`
 						}
-						err := c.Request("getrawtransaction", []any{tx.Txid, 1}, &rawTx)
+						err := c.Request("gettxout", []any{tx.Txid, voutIdx}, &txout)
 						if err != nil {
-							log.Printf("Error getting raw transaction %s: %v", tx.Txid, err)
-							continue
-						}
-
-						// If confirmations is 0, it's in mempool and could be spent
-						if rawTx.Confirmations == 0 {
-							// Check mempool for spending transactions
+							// If gettxout returns an error, it means the output is spent
+							isSpent = true
+						} else if txout.Confirmations == 0 {
+							// If confirmations is 0, check mempool for spending transactions
 							var mempool []string
 							err := c.Request("getrawmempool", []any{}, &mempool)
 							if err != nil {
