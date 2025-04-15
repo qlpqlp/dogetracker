@@ -203,9 +203,10 @@ func (db *DB) InsertUnspentTransaction(txHash, address string, amount float64, h
 func (db *DB) GetAddressBalance(address string) (float64, error) {
 	var balance float64
 	err := db.QueryRow(`
-		SELECT COALESCE(SUM(amount), 0)
-		FROM unspent_transactions
-		WHERE address = $1
+		SELECT COALESCE(SUM(ut.amount), 0)
+		FROM unspent_transactions ut
+		JOIN addresses a ON ut.address_id = a.id
+		WHERE a.address = $1
 	`, address).Scan(&balance)
 	return balance, err
 }
