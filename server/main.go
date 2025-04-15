@@ -50,23 +50,25 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 	// Log block information
 	log.Printf("Processing block: Height=%d, Hash=%s", header.Height, header.Hash)
 
-	// Get all tracked addresses
-	rows, err := db.Query("SELECT id, address FROM addresses")
+	// Get all tracked addresses with their required confirmations
+	rows, err := db.Query("SELECT id, address, required_confirmations FROM addresses")
 	if err != nil {
 		return fmt.Errorf("error getting tracked addresses: %v", err)
 	}
 	defer rows.Close()
 
 	var addresses []struct {
-		ID      int64
-		Address string
+		ID                    int64
+		Address               string
+		RequiredConfirmations int64
 	}
 	for rows.Next() {
 		var addr struct {
-			ID      int64
-			Address string
+			ID                    int64
+			Address               string
+			RequiredConfirmations int64
 		}
-		if err := rows.Scan(&addr.ID, &addr.Address); err != nil {
+		if err := rows.Scan(&addr.ID, &addr.Address, &addr.RequiredConfirmations); err != nil {
 			return fmt.Errorf("error scanning address: %v", err)
 		}
 		addresses = append(addresses, addr)
@@ -93,13 +95,16 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 
 		// Process each transaction
 		for _, tx := range txs {
+			// Determine if transaction is confirmed based on required confirmations
+			isConfirmed := header.Confirmations >= addr.RequiredConfirmations
+
 			// Store transaction
 			_, err := db.Exec(`
-				INSERT INTO transactions (address_id, tx_hash, amount, block_height, confirmations, is_spent, created_at)
-				VALUES ($1, $2, $3, $4, $5, $6, NOW())
+				INSERT INTO transactions (address_id, tx_hash, amount, block_height, confirmations, is_spent, is_confirmed, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 				ON CONFLICT (address_id, tx_hash) DO UPDATE
-				SET confirmations = $5, is_spent = $6, updated_at = NOW()
-			`, addr.ID, tx.Hash, tx.Amount, height, header.Confirmations, tx.IsSpent)
+				SET confirmations = $5, is_spent = $6, is_confirmed = $7, updated_at = NOW()
+			`, addr.ID, tx.Hash, tx.Amount, height, header.Confirmations, tx.IsSpent, isConfirmed)
 			if err != nil {
 				log.Printf("Error storing transaction %s for address %s: %v", tx.Hash, addr.Address, err)
 				continue
@@ -108,16 +113,16 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 			// If transaction is unspent, store in unspent_transactions
 			if !tx.IsSpent {
 				_, err := db.Exec(`
-					INSERT INTO unspent_transactions (address_id, tx_hash, amount, block_height, confirmations, created_at)
-					VALUES ($1, $2, $3, $4, $5, NOW())
+					INSERT INTO unspent_transactions (address_id, tx_hash, amount, block_height, confirmations, is_confirmed, created_at)
+					VALUES ($1, $2, $3, $4, $5, $6, NOW())
 					ON CONFLICT (address_id, tx_hash) DO UPDATE
-					SET confirmations = $5, updated_at = NOW()
-				`, addr.ID, tx.Hash, tx.Amount, height, header.Confirmations)
+					SET confirmations = $5, is_confirmed = $6, updated_at = NOW()
+				`, addr.ID, tx.Hash, tx.Amount, height, header.Confirmations, isConfirmed)
 				if err != nil {
 					log.Printf("Error storing unspent transaction %s for address %s: %v", tx.Hash, addr.Address, err)
 					continue
 				}
-				log.Printf("Stored unspent transaction %s for address %s: amount=%f", tx.Hash, addr.Address, tx.Amount)
+				log.Printf("Stored unspent transaction %s for address %s: amount=%f, confirmed=%v", tx.Hash, addr.Address, tx.Amount, isConfirmed)
 			} else {
 				// Remove from unspent if spent
 				_, err := db.Exec(`
@@ -132,12 +137,12 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 			}
 		}
 
-		// Update address balance
+		// Update address balance (only count confirmed unspent transactions)
 		var balance float64
 		err = db.QueryRow(`
 			SELECT COALESCE(SUM(amount), 0)
 			FROM unspent_transactions
-			WHERE address_id = $1
+			WHERE address_id = $1 AND is_confirmed = true
 		`, addr.ID).Scan(&balance)
 		if err != nil {
 			log.Printf("Error calculating balance for address %s: %v", addr.Address, err)

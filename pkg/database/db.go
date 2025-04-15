@@ -33,10 +33,11 @@ func (db *DB) InitSchema() error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS addresses (
 			id SERIAL PRIMARY KEY,
-			address VARCHAR(34) UNIQUE NOT NULL,
-			balance DECIMAL(20,8) DEFAULT 0,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			address VARCHAR(34) NOT NULL UNIQUE,
+			balance DECIMAL(20,8) NOT NULL DEFAULT 0,
+			required_confirmations INTEGER NOT NULL DEFAULT 1,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)
 	`)
 	if err != nil {
@@ -47,14 +48,15 @@ func (db *DB) InitSchema() error {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS transactions (
 			id SERIAL PRIMARY KEY,
+			address_id INTEGER NOT NULL REFERENCES addresses(id),
 			tx_hash VARCHAR(64) NOT NULL,
-			address_id INTEGER REFERENCES addresses(id),
 			amount DECIMAL(20,8) NOT NULL,
-			block_height BIGINT,
-			confirmations INTEGER DEFAULT 0,
-			is_spent BOOLEAN DEFAULT FALSE,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			block_height INTEGER NOT NULL,
+			confirmations INTEGER NOT NULL DEFAULT 0,
+			is_spent BOOLEAN NOT NULL DEFAULT FALSE,
+			is_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			UNIQUE(address_id, tx_hash)
 		)
 	`)
@@ -66,13 +68,14 @@ func (db *DB) InitSchema() error {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS unspent_transactions (
 			id SERIAL PRIMARY KEY,
+			address_id INTEGER NOT NULL REFERENCES addresses(id),
 			tx_hash VARCHAR(64) NOT NULL,
-			address_id INTEGER REFERENCES addresses(id),
 			amount DECIMAL(20,8) NOT NULL,
-			block_height BIGINT,
-			confirmations INTEGER DEFAULT 0,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			block_height INTEGER NOT NULL,
+			confirmations INTEGER NOT NULL DEFAULT 0,
+			is_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			UNIQUE(address_id, tx_hash)
 		)
 	`)
@@ -80,13 +83,13 @@ func (db *DB) InitSchema() error {
 		return fmt.Errorf("error creating unspent_transactions table: %v", err)
 	}
 
-	// Create processed_blocks table (only stores the latest block)
+	// Create processed_blocks table
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS processed_blocks (
-			id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-			height BIGINT NOT NULL,
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			height INTEGER NOT NULL,
 			hash VARCHAR(64) NOT NULL,
-			processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			processed_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)
 	`)
 	if err != nil {

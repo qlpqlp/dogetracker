@@ -151,49 +151,65 @@ func (s *Server) handleAddress(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// isValidAddress checks if the given string is a valid Dogecoin address
+func isValidAddress(address string) bool {
+	// Basic validation - Dogecoin addresses start with 'D' and are 34 characters long
+	if len(address) != 34 || !strings.HasPrefix(address, "D") {
+		return false
+	}
+	// TODO: Add more thorough validation if needed
+	return true
+}
+
 func (s *Server) handleTrack(w http.ResponseWriter, r *http.Request) {
-	// Check authorization
-	authHeader := r.Header.Get("Authorization")
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if token != s.token {
+
+	// Check authorization
+	if !s.authenticate(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
 	// Parse request body
-	var req TrackRequest
+	var req struct {
+		Address               string `json:"address"`
+		RequiredConfirmations int64  `json:"required_confirmations"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	// Validate address
-	if req.Address == "" {
-		http.Error(w, "Address is required", http.StatusBadRequest)
+	if !isValidAddress(req.Address) {
+		http.Error(w, "Invalid address", http.StatusBadRequest)
 		return
 	}
 
-	// Save address to database
+	// Validate required confirmations
+	if req.RequiredConfirmations < 1 {
+		req.RequiredConfirmations = 1 // Default to 1 confirmation if not specified
+	}
+
+	// Add address to database
 	_, err := s.db.Exec(`
-		INSERT INTO addresses (address)
-		VALUES ($1)
-		ON CONFLICT (address) DO NOTHING
-	`, req.Address)
+		INSERT INTO addresses (address, required_confirmations)
+		VALUES ($1, $2)
+		ON CONFLICT (address) DO UPDATE
+		SET required_confirmations = $2, updated_at = NOW()
+	`, req.Address, req.RequiredConfirmations)
 	if err != nil {
-		log.Printf("Error saving address: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(w, "Error tracking address", http.StatusInternalServerError)
 		return
 	}
 
-	// Return success response
-	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
-		"message": "Address is being tracked",
+		"message": "Address tracked successfully",
 	})
 }
 
