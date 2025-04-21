@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"syscall"
@@ -11,38 +12,55 @@ import (
 	"github.com/pebbe/zmq4"
 )
 
+// Transaction represents a raw transaction from ZMQ
+type RawTransaction struct {
+	TxID string
+	Vin  []struct {
+		TxID string `json:"txid"`
+		Vout int    `json:"vout"`
+	} `json:"vin"`
+	Vout []struct {
+		Value        float64 `json:"value"`
+		ScriptPubKey struct {
+			Addresses []string `json:"addresses"`
+		} `json:"scriptPubKey"`
+	} `json:"vout"`
+}
+
 /*
  * CoreZMQListener listens to Core Node ZMQ Interface.
  *
  * newTip channel announces whenever Core finds a new Best Block Hash (Tip change)
+ * newTx channel announces whenever Core finds a new transaction
  */
-func CoreZMQListener(ctx context.Context, host string, port int) (<-chan string, error) {
+func CoreZMQListener(ctx context.Context, host string, port int) (<-chan string, <-chan RawTransaction, error) {
 	newTip := make(chan string, 100)
+	newTx := make(chan RawTransaction, 100)
 	nodeAddress := fmt.Sprintf("tcp://%s:%d", host, port)
 
 	// Connect to Core
 	sock, err := zmq4.NewSocket(zmq4.SUB)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sock.SetRcvtimeo(2 * time.Second) // for shutdown
 	err = sock.Connect(nodeAddress)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Subscribe to both block and transaction events
 	err = sock.SetSubscribe("hashblock")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	err = sock.SetSubscribe("hashtx")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	err = sock.SetSubscribe("rawtx")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	go func() {
@@ -83,18 +101,19 @@ func CoreZMQListener(ctx context.Context, host string, port int) (<-chan string,
 			case "hashtx":
 				txid := hex.EncodeToString(msg[1])
 				log.Printf("New transaction detected: %s", txid)
-				// We don't need to do anything with the transaction here
-				// as it will be processed when the block containing it is processed
 			case "rawtx":
-				// This is a raw transaction that might be spending our outputs
-				txid := hex.EncodeToString(msg[1])
-				log.Printf("Raw transaction received: %s", txid)
-				// We'll process this transaction to check if it spends any of our outputs
-				// The transaction processing will happen in the block processing
+				// Parse the raw transaction
+				var rawTx RawTransaction
+				if err := json.Unmarshal(msg[1], &rawTx); err != nil {
+					log.Printf("Error parsing raw transaction: %v", err)
+					continue
+				}
+				rawTx.TxID = hex.EncodeToString(msg[1])
+				newTx <- rawTx
 			default:
 				log.Printf("Unknown ZMQ message type: %s", tag)
 			}
 		}
 	}()
-	return newTip, nil
+	return newTip, newTx, nil
 }

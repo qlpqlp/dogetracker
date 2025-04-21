@@ -41,13 +41,7 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 		return fmt.Errorf("error getting block hash: %v", err)
 	}
 
-	// Get block header
-	header, err := blockchain.GetBlockHeader(hash)
-	if err != nil {
-		return fmt.Errorf("error getting block header: %v", err)
-	}
-
-	log.Printf("Processing block %d (%s) with %d transactions", height, hash, header.NTx)
+	log.Printf("Processing block %d (%s)", height, hash)
 
 	// Get tracked addresses
 	addresses, err := db.GetTrackedAddresses()
@@ -195,13 +189,118 @@ func main() {
 		}
 	}
 
-	// Set up ZMQ listener for new blocks (but don't wait for it)
-	zmqTip, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
+	// Set up ZMQ listener for new blocks and transactions
+	zmqTip, zmqTx, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
 	if err != nil {
 		log.Printf("CoreZMQListener: %v", err)
 		os.Exit(1)
 	}
 	_ = chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
+
+	// Process transactions in real-time
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case tx := <-zmqTx:
+				// Get tracked addresses
+				addresses, err := db.GetTrackedAddresses()
+				if err != nil {
+					log.Printf("Error getting tracked addresses: %v", err)
+					continue
+				}
+
+				// Check if any of our tracked addresses are involved in this transaction
+				for _, addr := range addresses {
+					// Check inputs (spent transactions)
+					for _, vin := range tx.Vin {
+						if vin.TxID != "" {
+							// Get the previous transaction to check if it was to our address
+							var prevTx struct {
+								Vout []struct {
+									ScriptPubKey struct {
+										Addresses []string `json:"addresses"`
+									} `json:"scriptPubKey"`
+								} `json:"vout"`
+							}
+							err := blockchain.Request("getrawtransaction", []any{vin.TxID, 1}, &prevTx)
+							if err != nil {
+								continue
+							}
+
+							// Check if the spent output was to our address
+							if vin.Vout < len(prevTx.Vout) {
+								for _, prevAddr := range prevTx.Vout[vin.Vout].ScriptPubKey.Addresses {
+									if prevAddr == addr {
+										// This transaction is spending our output
+										err = db.MarkTransactionSpent(vin.TxID, tx.Vout[0].ScriptPubKey.Addresses[0])
+										if err != nil {
+											log.Printf("Error marking transaction %s as spent: %v", vin.TxID, err)
+										}
+									}
+								}
+							}
+						}
+					}
+
+					// Check outputs (received transactions)
+					for _, vout := range tx.Vout {
+						if vout.ScriptPubKey.Addresses != nil {
+							for _, toAddr := range vout.ScriptPubKey.Addresses {
+								if toAddr == addr {
+									// This is a transaction to our address
+									// Get the from address from the inputs
+									var fromAddress string
+									if len(tx.Vin) > 0 && tx.Vin[0].TxID != "" {
+										var prevTx struct {
+											Vout []struct {
+												ScriptPubKey struct {
+													Addresses []string `json:"addresses"`
+												} `json:"scriptPubKey"`
+											} `json:"vout"`
+										}
+										err := blockchain.Request("getrawtransaction", []any{tx.Vin[0].TxID, 1}, &prevTx)
+										if err == nil && len(prevTx.Vout) > tx.Vin[0].Vout {
+											if len(prevTx.Vout[tx.Vin[0].Vout].ScriptPubKey.Addresses) > 0 {
+												fromAddress = prevTx.Vout[tx.Vin[0].Vout].ScriptPubKey.Addresses[0]
+											}
+										}
+									}
+
+									// Insert the transaction
+									err = db.InsertTransaction(tx.TxID, addr, vout.Value, 0, fromAddress, toAddr)
+									if err != nil {
+										log.Printf("Error inserting transaction %s: %v", tx.TxID, err)
+										continue
+									}
+
+									// Add to unspent transactions
+									err = db.InsertUnspentTransaction(tx.TxID, addr, vout.Value, 0)
+									if err != nil {
+										log.Printf("Error inserting unspent transaction %s: %v", tx.TxID, err)
+										continue
+									}
+
+									// Update address balance
+									balance, err := db.GetAddressBalance(addr)
+									if err != nil {
+										log.Printf("Error getting balance for address %s: %v", addr, err)
+										continue
+									}
+									err = db.UpdateAddressBalance(addr, balance)
+									if err != nil {
+										log.Printf("Error updating balance for address %s: %v", addr, err)
+										continue
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}()
 
 	// Process blocks in a separate goroutine
 	go func() {

@@ -8,6 +8,7 @@ type Blockchain interface {
 	GetBestBlockHash() (blockHash string, err error)
 	GetBlockCount() (blockCount int64, err error)
 	GetAddressTransactions(address string, height int64) ([]Transaction, error)
+	Request(method string, params []any, result any) error
 }
 
 // Transaction represents a Dogecoin transaction
