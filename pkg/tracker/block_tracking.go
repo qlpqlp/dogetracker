@@ -95,18 +95,8 @@ func (bt *BlockTracker) processTransaction(tx *doge.Transaction, blockHeight int
 	// Check for spent transactions
 	for _, vin := range tx.Vin {
 		if vin.Txid != "" {
-			// Mark the referenced transaction as spent
-			_, err := bt.db.Exec(`
-				UPDATE transactions 
-				SET is_spent = TRUE, updated_at = CURRENT_TIMESTAMP
-				WHERE tx_hash = $1
-			`, vin.Txid)
-			if err != nil {
-				return fmt.Errorf("error marking transaction as spent: %v", err)
-			}
-
 			// Remove from unspent_transactions
-			_, err = bt.db.Exec(`
+			_, err := bt.db.Exec(`
 				DELETE FROM unspent_transactions
 				WHERE tx_hash = $1
 			`, vin.Txid)

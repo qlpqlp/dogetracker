@@ -17,7 +17,6 @@ type Transaction struct {
 	Amount        float64   `json:"amount"`
 	BlockHeight   int64     `json:"block_height"`
 	Confirmations int       `json:"confirmations"`
-	IsSpent       bool      `json:"is_spent"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

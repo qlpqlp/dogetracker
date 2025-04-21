@@ -57,7 +57,6 @@ type TransactionResponse struct {
 	Amount        float64 `json:"amount"`
 	BlockHeight   int64   `json:"block_height"`
 	Confirmations int     `json:"confirmations"`
-	IsSpent       bool    `json:"is_spent"`
 	CreatedAt     string  `json:"created_at"`
 }
 
@@ -101,7 +100,7 @@ func (s *Server) handleAddress(w http.ResponseWriter, r *http.Request) {
 
 	// Get transactions
 	rows, err := s.db.Query(`
-		SELECT t.tx_hash, t.amount, t.block_height, t.confirmations, t.is_spent, t.created_at
+		SELECT t.tx_hash, t.amount, t.block_height, t.confirmations, t.created_at
 		FROM transactions t
 		JOIN addresses a ON t.address_id = a.id
 		WHERE a.address = $1
@@ -115,7 +114,7 @@ func (s *Server) handleAddress(w http.ResponseWriter, r *http.Request) {
 
 	for rows.Next() {
 		var tx TransactionResponse
-		err := rows.Scan(&tx.TxHash, &tx.Amount, &tx.BlockHeight, &tx.Confirmations, &tx.IsSpent, &tx.CreatedAt)
+		err := rows.Scan(&tx.TxHash, &tx.Amount, &tx.BlockHeight, &tx.Confirmations, &tx.CreatedAt)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error scanning transaction: %v", err), http.StatusInternalServerError)
 			return
@@ -225,7 +224,6 @@ type Transaction struct {
 	Amount        float64   `json:"amount"`
 	BlockHeight   int64     `json:"block_height"`
 	Confirmations int       `json:"confirmations"`
-	IsSpent       bool      `json:"is_spent"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -287,7 +285,7 @@ func (s *Server) handleGetAddress(w http.ResponseWriter, r *http.Request) {
 
 	// Get transactions
 	rows, err := s.db.Query(`
-		SELECT tx_hash, amount, block_height, confirmations, is_spent, created_at
+		SELECT tx_hash, amount, block_height, confirmations, created_at
 		FROM transactions
 		WHERE address_id = $1
 		ORDER BY created_at DESC
@@ -300,7 +298,7 @@ func (s *Server) handleGetAddress(w http.ResponseWriter, r *http.Request) {
 
 	for rows.Next() {
 		var tx Transaction
-		err := rows.Scan(&tx.TxHash, &tx.Amount, &tx.BlockHeight, &tx.Confirmations, &tx.IsSpent, &tx.CreatedAt)
+		err := rows.Scan(&tx.TxHash, &tx.Amount, &tx.BlockHeight, &tx.Confirmations, &tx.CreatedAt)
 		if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return

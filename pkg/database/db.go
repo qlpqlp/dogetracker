@@ -53,8 +53,6 @@ func (db *DB) InitSchema() error {
 			amount DECIMAL(20,8) NOT NULL,
 			block_height INTEGER NOT NULL,
 			confirmations INTEGER NOT NULL DEFAULT 0,
-			is_spent BOOLEAN NOT NULL DEFAULT FALSE,
-			is_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
 			from_address VARCHAR(34),
 			to_address VARCHAR(34),
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
