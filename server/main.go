@@ -66,26 +66,28 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 
 		// Process each transaction
 		for _, tx := range txs {
-			// Insert transaction into database
-			err = db.InsertTransaction(tx.Hash, addr, tx.Amount, height, tx.FromAddress, tx.ToAddress)
-			if err != nil {
-				log.Printf("Error inserting transaction %s: %v", tx.Hash, err)
-				continue
-			}
-
-			// If transaction is spent, remove it from unspent_transactions
+			// If transaction is spent, mark it as spent and insert the spent transaction
 			if tx.IsSpent {
 				err = db.MarkTransactionSpent(tx.Hash, tx.ToAddress)
 				if err != nil {
 					log.Printf("Error marking transaction %s as spent: %v", tx.Hash, err)
 					continue
 				}
-			} else if tx.Amount > 0 {
-				// Only add to unspent transactions if it's a received transaction (positive amount)
-				err = db.InsertUnspentTransaction(tx.Hash, addr, tx.Amount, height)
+			} else {
+				// For non-spent transactions, insert into transactions table
+				err = db.InsertTransaction(tx.Hash, addr, tx.Amount, height, tx.FromAddress, tx.ToAddress)
 				if err != nil {
-					log.Printf("Error inserting unspent transaction %s: %v", tx.Hash, err)
+					log.Printf("Error inserting transaction %s: %v", tx.Hash, err)
 					continue
+				}
+
+				// Only add to unspent transactions if it's a received transaction (positive amount)
+				if tx.Amount > 0 {
+					err = db.InsertUnspentTransaction(tx.Hash, addr, tx.Amount, height)
+					if err != nil {
+						log.Printf("Error inserting unspent transaction %s: %v", tx.Hash, err)
+						continue
+					}
 				}
 			}
 
