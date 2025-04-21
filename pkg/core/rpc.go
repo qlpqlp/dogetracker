@@ -94,6 +94,7 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 				// Get the previous transaction to check if it was to our address
 				var prevTx struct {
 					Vout []struct {
+						Value        float64 `json:"value"`
 						ScriptPubKey struct {
 							Addresses []string `json:"addresses"`
 						} `json:"scriptPubKey"`
@@ -111,7 +112,7 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 							// This transaction is spending our output
 							transactions = append(transactions, spec.Transaction{
 								Hash:    vin.Txid,
-								Amount:  0, // We'll get the amount from the original transaction
+								Amount:  -prevTx.Vout[vin.Vout].Value, // Negative amount for spent transactions
 								IsSpent: true,
 							})
 						}
@@ -121,41 +122,11 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 		}
 
 		// Check outputs for payments to the address
-		for voutIdx, vout := range tx.Vout {
-			for _, addr := range vout.ScriptPubKey.Addresses {
-				if addr == address {
-					// Use gettxout to check if the output is still unspent
-					var txout struct {
-						Confirmations int64 `json:"confirmations"`
-					}
-					err := c.Request("gettxout", []any{tx.Txid, voutIdx}, &txout)
-
-					// If gettxout returns an error, it means the output is spent
-					isSpent := err != nil
-
-					// If we think it's spent, verify by checking the transaction's status
-					if isSpent {
-						var rawTx struct {
-							Confirmations int64 `json:"confirmations"`
-						}
-						err := c.Request("getrawtransaction", []any{tx.Txid, 1}, &rawTx)
-						if err == nil && rawTx.Confirmations > 0 {
-							// Transaction is confirmed and spent
-							transactions = append(transactions, spec.Transaction{
-								Hash:    tx.Txid,
-								Amount:  vout.Value,
-								IsSpent: true,
-							})
-						} else {
-							// Transaction might not be spent yet or is invalid
-							transactions = append(transactions, spec.Transaction{
-								Hash:    tx.Txid,
-								Amount:  vout.Value,
-								IsSpent: false,
-							})
-						}
-					} else {
-						// Transaction is definitely unspent
+		for _, vout := range tx.Vout {
+			if vout.ScriptPubKey.Addresses != nil {
+				for _, addr := range vout.ScriptPubKey.Addresses {
+					if addr == address {
+						// This is a transaction to our address
 						transactions = append(transactions, spec.Transaction{
 							Hash:    tx.Txid,
 							Amount:  vout.Value,

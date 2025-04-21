@@ -80,8 +80,8 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 					log.Printf("Error marking transaction %s as spent: %v", tx.Hash, err)
 					continue
 				}
-			} else {
-				// Add to unspent transactions
+			} else if tx.Amount > 0 {
+				// Only add to unspent transactions if it's a received transaction (positive amount)
 				err = db.InsertUnspentTransaction(tx.Hash, addr, tx.Amount, height)
 				if err != nil {
 					log.Printf("Error inserting unspent transaction %s: %v", tx.Hash, err)
