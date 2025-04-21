@@ -109,13 +109,19 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 				if vin.Vout < len(prevTx.Vout) {
 					for _, addr := range prevTx.Vout[vin.Vout].ScriptPubKey.Addresses {
 						if addr == address {
+							// Get the to address from the current transaction's outputs
+							var toAddress string
+							if len(tx.Vout) > 0 && len(tx.Vout[0].ScriptPubKey.Addresses) > 0 {
+								toAddress = tx.Vout[0].ScriptPubKey.Addresses[0]
+							}
+
 							// This transaction is spending our output
 							transactions = append(transactions, spec.Transaction{
 								Hash:        vin.Txid,
 								Amount:      -prevTx.Vout[vin.Vout].Value, // Negative amount for spent transactions
 								IsSpent:     true,
 								FromAddress: address,
-								ToAddress:   "", // We'll get this from the current transaction's outputs
+								ToAddress:   toAddress,
 							})
 						}
 					}

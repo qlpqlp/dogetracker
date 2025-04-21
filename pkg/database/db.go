@@ -166,12 +166,7 @@ func (db *DB) InsertTransaction(txHash, address string, amount float64, height i
 	_, err = db.Exec(`
 		INSERT INTO transactions (tx_hash, address_id, amount, block_height, confirmations, from_address, to_address, created_at)
 		VALUES ($1, $2, $3, $4, 1, $5, $6, NOW())
-		ON CONFLICT (address_id, tx_hash) DO UPDATE
-		SET amount = $3,
-			block_height = $4,
-			from_address = $5,
-			to_address = $6,
-			updated_at = NOW()
+		ON CONFLICT (address_id, tx_hash) DO NOTHING
 	`, txHash, addressID, amount, height, fromAddress, toAddress)
 	return err
 }
