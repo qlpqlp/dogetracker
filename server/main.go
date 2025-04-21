@@ -34,15 +34,15 @@ type Config struct {
 	apiToken  string
 }
 
-func processBlock(client spec.Blockchain, db *database.DB, height int64) error {
+func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockchain, height int64) error {
 	// Get block hash
-	hash, err := client.GetBlockHash(height)
+	hash, err := blockchain.GetBlockHash(height)
 	if err != nil {
 		return fmt.Errorf("error getting block hash: %v", err)
 	}
 
 	// Get block header
-	header, err := client.GetBlockHeader(hash)
+	header, err := blockchain.GetBlockHeader(hash)
 	if err != nil {
 		return fmt.Errorf("error getting block header: %v", err)
 	}
@@ -56,26 +56,33 @@ func processBlock(client spec.Blockchain, db *database.DB, height int64) error {
 	}
 
 	// Process each address
-	for _, address := range addresses {
-		// Get transactions for this address
-		transactions, err := client.GetAddressTransactions(address, height)
+	for _, addr := range addresses {
+		// Get raw transactions for this address
+		txs, err := blockchain.GetAddressTransactions(addr, height)
 		if err != nil {
-			log.Printf("Error getting transactions for address %s: %v", address, err)
+			log.Printf("Error getting transactions for address %s: %v", addr, err)
 			continue
 		}
 
 		// Process each transaction
-		for _, tx := range transactions {
+		for _, tx := range txs {
 			// Insert transaction into database
-			err = db.InsertTransaction(tx.Hash, address, tx.Amount, height, tx.FromAddress, tx.ToAddress)
+			err = db.InsertTransaction(tx.Hash, addr, tx.Amount, height, tx.FromAddress, tx.ToAddress)
 			if err != nil {
 				log.Printf("Error inserting transaction %s: %v", tx.Hash, err)
 				continue
 			}
 
-			// If this is a transaction to our address, add it to unspent transactions
-			if tx.ToAddress == address {
-				err = db.InsertUnspentTransaction(tx.Hash, address, tx.Amount, height)
+			// If transaction is spent, remove it from unspent_transactions
+			if tx.IsSpent {
+				err = db.MarkTransactionSpent(tx.Hash)
+				if err != nil {
+					log.Printf("Error marking transaction %s as spent: %v", tx.Hash, err)
+					continue
+				}
+			} else if tx.Amount > 0 {
+				// Only add to unspent transactions if it's a received transaction (positive amount)
+				err = db.InsertUnspentTransaction(tx.Hash, addr, tx.Amount, height)
 				if err != nil {
 					log.Printf("Error inserting unspent transaction %s: %v", tx.Hash, err)
 					continue
@@ -83,15 +90,14 @@ func processBlock(client spec.Blockchain, db *database.DB, height int64) error {
 			}
 
 			// Update address balance
-			balance, err := db.GetAddressBalance(address)
+			balance, err := db.GetAddressBalance(addr)
 			if err != nil {
-				log.Printf("Error getting balance for address %s: %v", address, err)
+				log.Printf("Error getting balance for address %s: %v", addr, err)
 				continue
 			}
-
-			err = db.UpdateAddressBalance(address, balance)
+			err = db.UpdateAddressBalance(addr, balance)
 			if err != nil {
-				log.Printf("Error updating balance for address %s: %v", address, err)
+				log.Printf("Error updating balance for address %s: %v", addr, err)
 				continue
 			}
 		}
@@ -215,7 +221,7 @@ func main() {
 
 				// Process all blocks up to the current height
 				for height := currentHeight; height <= blockCount; height++ {
-					if err := processBlock(blockchain, db, height); err != nil {
+					if err := processBlock(ctx, db, blockchain, height); err != nil {
 						log.Printf("Error processing block %d: %v", height, err)
 						continue
 					}

@@ -16,6 +16,7 @@ type Transaction struct {
 	Amount      float64 `json:"amount"`
 	FromAddress string  `json:"from_address"`
 	ToAddress   string  `json:"to_address"`
+	IsSpent     bool    `json:"is_spent"`
 }
 
 // BlockHeader from Dogecoin Core
