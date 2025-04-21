@@ -75,7 +75,7 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 
 			// If transaction is spent, remove it from unspent_transactions
 			if tx.IsSpent {
-				err = db.MarkTransactionSpent(tx.Hash)
+				err = db.MarkTransactionSpent(tx.Hash, tx.ToAddress)
 				if err != nil {
 					log.Printf("Error marking transaction %s as spent: %v", tx.Hash, err)
 					continue
