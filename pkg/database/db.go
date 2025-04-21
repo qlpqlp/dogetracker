@@ -56,8 +56,7 @@ func (db *DB) InitSchema() error {
 			from_address VARCHAR(34),
 			to_address VARCHAR(34),
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			UNIQUE(address_id, tx_hash)
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)
 	`)
 	if err != nil {
@@ -166,7 +165,6 @@ func (db *DB) InsertTransaction(txHash, address string, amount float64, height i
 	_, err = db.Exec(`
 		INSERT INTO transactions (tx_hash, address_id, amount, block_height, confirmations, from_address, to_address, created_at)
 		VALUES ($1, $2, $3, $4, 1, $5, $6, NOW())
-		ON CONFLICT (address_id, tx_hash) DO NOTHING
 	`, txHash, addressID, amount, height, fromAddress, toAddress)
 	return err
 }
