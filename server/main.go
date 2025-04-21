@@ -189,7 +189,7 @@ func main() {
 	}
 
 	// Set up ZMQ listener for new blocks and transactions
-	zmqTip, zmqTx, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
+	_, zmqTx, err := core.CoreZMQListener(ctx, config.zmqHost, config.zmqPort)
 	if err != nil {
 		log.Printf("CoreZMQListener: %v", err)
 		os.Exit(1)

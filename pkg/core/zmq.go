@@ -41,7 +41,7 @@ func CoreZMQListener(ctx context.Context, host string, port int) (<-chan string,
 	nodeAddress := fmt.Sprintf("tcp://%s:%d", host, port)
 
 	// Connect to Core
-	sock, err := zmq4.NewSocket(zmq4.SUB)
+	sock, err := zmq4.NewSocket(zmq4.Type(zmq4.SUB))
 	if err != nil {
 		return nil, nil, err
 	}
