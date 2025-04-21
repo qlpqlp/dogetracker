@@ -111,9 +111,11 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 						if addr == address {
 							// This transaction is spending our output
 							transactions = append(transactions, spec.Transaction{
-								Hash:    vin.Txid,
-								Amount:  -prevTx.Vout[vin.Vout].Value, // Negative amount for spent transactions
-								IsSpent: true,
+								Hash:        vin.Txid,
+								Amount:      -prevTx.Vout[vin.Vout].Value, // Negative amount for spent transactions
+								IsSpent:     true,
+								FromAddress: address,
+								ToAddress:   "", // We'll get this from the current transaction's outputs
 							})
 						}
 					}
@@ -127,10 +129,30 @@ func (c *CoreRPCClient) GetAddressTransactions(address string, height int64) ([]
 				for _, addr := range vout.ScriptPubKey.Addresses {
 					if addr == address {
 						// This is a transaction to our address
+						// Get the from address from the inputs
+						var fromAddress string
+						if len(tx.Vin) > 0 && tx.Vin[0].Txid != "" {
+							var prevTx struct {
+								Vout []struct {
+									ScriptPubKey struct {
+										Addresses []string `json:"addresses"`
+									} `json:"scriptPubKey"`
+								} `json:"vout"`
+							}
+							err := c.Request("getrawtransaction", []any{tx.Vin[0].Txid, 1}, &prevTx)
+							if err == nil && len(prevTx.Vout) > tx.Vin[0].Vout {
+								if len(prevTx.Vout[tx.Vin[0].Vout].ScriptPubKey.Addresses) > 0 {
+									fromAddress = prevTx.Vout[tx.Vin[0].Vout].ScriptPubKey.Addresses[0]
+								}
+							}
+						}
+
 						transactions = append(transactions, spec.Transaction{
-							Hash:    tx.Txid,
-							Amount:  vout.Value,
-							IsSpent: false,
+							Hash:        tx.Txid,
+							Amount:      vout.Value,
+							IsSpent:     false,
+							FromAddress: fromAddress,
+							ToAddress:   addr,
 						})
 					}
 				}

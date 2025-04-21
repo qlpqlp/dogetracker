@@ -12,9 +12,11 @@ type Blockchain interface {
 
 // Transaction represents a Dogecoin transaction
 type Transaction struct {
-	Hash    string  `json:"hash"`
-	Amount  float64 `json:"amount"`
-	IsSpent bool    `json:"is_spent"`
+	Hash        string  `json:"hash"`
+	Amount      float64 `json:"amount"`
+	IsSpent     bool    `json:"is_spent"`
+	FromAddress string  `json:"from_address"`
+	ToAddress   string  `json:"to_address"`
 }
 
 // BlockHeader from Dogecoin Core

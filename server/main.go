@@ -67,7 +67,7 @@ func processBlock(ctx context.Context, db *database.DB, blockchain spec.Blockcha
 		// Process each transaction
 		for _, tx := range txs {
 			// Insert transaction into database
-			err = db.InsertTransaction(tx.Hash, addr, tx.Amount, height)
+			err = db.InsertTransaction(tx.Hash, addr, tx.Amount, height, tx.FromAddress, tx.ToAddress)
 			if err != nil {
 				log.Printf("Error inserting transaction %s: %v", tx.Hash, err)
 				continue

@@ -55,6 +55,8 @@ func (db *DB) InitSchema() error {
 			confirmations INTEGER NOT NULL DEFAULT 0,
 			is_spent BOOLEAN NOT NULL DEFAULT FALSE,
 			is_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+			from_address VARCHAR(34),
+			to_address VARCHAR(34),
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			UNIQUE(address_id, tx_hash)
@@ -155,7 +157,7 @@ func (db *DB) GetTrackedAddresses() ([]string, error) {
 }
 
 // InsertTransaction inserts a new transaction into the database
-func (db *DB) InsertTransaction(txHash, address string, amount float64, height int64) error {
+func (db *DB) InsertTransaction(txHash, address string, amount float64, height int64, fromAddress, toAddress string) error {
 	// First get the address_id
 	var addressID int64
 	err := db.QueryRow("SELECT id FROM addresses WHERE address = $1", address).Scan(&addressID)
@@ -165,10 +167,15 @@ func (db *DB) InsertTransaction(txHash, address string, amount float64, height i
 
 	// Insert the transaction
 	_, err = db.Exec(`
-		INSERT INTO transactions (tx_hash, address_id, amount, block_height, confirmations, created_at)
-		VALUES ($1, $2, $3, $4, 1, NOW())
-		ON CONFLICT (address_id, tx_hash) DO NOTHING
-	`, txHash, addressID, amount, height)
+		INSERT INTO transactions (tx_hash, address_id, amount, block_height, confirmations, from_address, to_address, created_at)
+		VALUES ($1, $2, $3, $4, 1, $5, $6, NOW())
+		ON CONFLICT (address_id, tx_hash) DO UPDATE
+		SET amount = $3,
+			block_height = $4,
+			from_address = $5,
+			to_address = $6,
+			updated_at = NOW()
+	`, txHash, addressID, amount, height, fromAddress, toAddress)
 	return err
 }
 
