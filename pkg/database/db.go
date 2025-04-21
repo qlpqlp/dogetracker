@@ -73,7 +73,6 @@ func (db *DB) InitSchema() error {
 			amount DECIMAL(20,8) NOT NULL,
 			block_height INTEGER NOT NULL,
 			confirmations INTEGER NOT NULL DEFAULT 0,
-			is_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			UNIQUE(address_id, tx_hash)
@@ -177,13 +176,55 @@ func (db *DB) InsertTransaction(txHash, address string, amount float64, height i
 	return err
 }
 
-// MarkTransactionSpent marks a transaction as spent in the database
-func (db *DB) MarkTransactionSpent(txHash string) error {
-	_, err := db.Exec(`
+// MarkTransactionSpent marks a transaction as spent by creating a new transaction record
+// and removing it from unspent_transactions
+func (db *DB) MarkTransactionSpent(txHash string, toAddress string) error {
+	// Start a transaction
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("error starting transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	// Get the original transaction details
+	var addressID int64
+	var amount float64
+	var blockHeight int64
+	var fromAddress string
+	err = tx.QueryRow(`
+		SELECT address_id, amount, block_height, a.address
+		FROM unspent_transactions ut
+		JOIN addresses a ON ut.address_id = a.id
+		WHERE tx_hash = $1
+	`, txHash).Scan(&addressID, &amount, &blockHeight, &fromAddress)
+	if err != nil {
+		return fmt.Errorf("error getting original transaction: %v", err)
+	}
+
+	// Insert a new transaction record for the spent amount
+	_, err = tx.Exec(`
+		INSERT INTO transactions (tx_hash, address_id, amount, block_height, confirmations, from_address, to_address, created_at)
+		VALUES ($1, $2, $3, $4, 1, $5, $6, NOW())
+	`, txHash, addressID, -amount, blockHeight, fromAddress, toAddress)
+	if err != nil {
+		return fmt.Errorf("error inserting spent transaction: %v", err)
+	}
+
+	// Remove from unspent_transactions
+	_, err = tx.Exec(`
 		DELETE FROM unspent_transactions
 		WHERE tx_hash = $1
 	`, txHash)
-	return err
+	if err != nil {
+		return fmt.Errorf("error removing from unspent_transactions: %v", err)
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("error committing transaction: %v", err)
+	}
+
+	return nil
 }
 
 // InsertUnspentTransaction inserts a new unspent transaction
