@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/dogeorg/dogetracker/pkg/api"
-	"github.com/dogeorg/dogetracker/pkg/chaser"
 	"github.com/dogeorg/dogetracker/pkg/core"
 	"github.com/dogeorg/dogetracker/pkg/database"
 	"github.com/dogeorg/dogetracker/pkg/spec"
@@ -195,7 +194,6 @@ func main() {
 		log.Printf("CoreZMQListener: %v", err)
 		os.Exit(1)
 	}
-	_ = chaser.NewTipChaser(ctx, zmqTip, blockchain).Listen(1, true)
 
 	// Process transactions in real-time
 	go func() {
@@ -216,30 +214,10 @@ func main() {
 					// Check inputs (spent transactions)
 					for _, vin := range tx.Vin {
 						if vin.TxID != "" {
-							// Get the previous transaction to check if it was to our address
-							var prevTx struct {
-								Vout []struct {
-									ScriptPubKey struct {
-										Addresses []string `json:"addresses"`
-									} `json:"scriptPubKey"`
-								} `json:"vout"`
-							}
-							err := blockchain.Request("getrawtransaction", []any{vin.TxID, 1}, &prevTx)
+							// Mark the previous transaction as spent
+							err = db.MarkTransactionSpent(vin.TxID, addr)
 							if err != nil {
-								continue
-							}
-
-							// Check if the spent output was to our address
-							if vin.Vout < len(prevTx.Vout) {
-								for _, prevAddr := range prevTx.Vout[vin.Vout].ScriptPubKey.Addresses {
-									if prevAddr == addr {
-										// This transaction is spending our output
-										err = db.MarkTransactionSpent(vin.TxID, tx.Vout[0].ScriptPubKey.Addresses[0])
-										if err != nil {
-											log.Printf("Error marking transaction %s as spent: %v", vin.TxID, err)
-										}
-									}
-								}
+								log.Printf("Error marking transaction %s as spent: %v", vin.TxID, err)
 							}
 						}
 					}
@@ -253,6 +231,7 @@ func main() {
 									// Get the from address from the inputs
 									var fromAddress string
 									if len(tx.Vin) > 0 && tx.Vin[0].TxID != "" {
+										// Get the previous transaction to check the source address
 										var prevTx struct {
 											Vout []struct {
 												ScriptPubKey struct {

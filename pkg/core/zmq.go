@@ -25,6 +25,8 @@ type RawTransaction struct {
 			Addresses []string `json:"addresses"`
 		} `json:"scriptPubKey"`
 	} `json:"vout"`
+	BlockHash string `json:"blockhash,omitempty"`
+	Time      int64  `json:"time,omitempty"`
 }
 
 /*
